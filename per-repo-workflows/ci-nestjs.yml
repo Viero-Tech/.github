@@ -1,0 +1,11 @@
+name: CI
+on:
+  pull_request:
+    branches: [dev, staging]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+jobs:
+  ci:
+    uses: Viero-Tech/.github/.github/workflows/reusable-ci-nestjs.yml@main
