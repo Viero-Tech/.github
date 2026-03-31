@@ -1,0 +1,46 @@
+{
+  "nestjs": [
+    "fuel-logistics-backend",
+    "total-platform-be",
+    "total-driver-be",
+    "total-customer-be",
+    "transit-platform-be",
+    "transit-driver-be",
+    "unigaz-platform-be",
+    "unigaz-driver-be",
+    "fleet-cards-backend",
+    "idp-backend",
+    "generalized-platform-backend"
+  ],
+  "nextjs": [
+    "total-platform-fe",
+    "transit-platform-fe",
+    "unigaz-platform-fe"
+  ],
+  "flutter": [
+    "fuel-logistics-driver-app",
+    "total-driver-app",
+    "total-customer-app",
+    "transit-driver-app",
+    "unigaz-driver-app"
+  ],
+  "prisma": [
+    "total-centralized-prisma",
+    "transit-centralized-prisma",
+    "unigaz-centralized-prisma"
+  ],
+  "python": [
+    "ai-route-optimization"
+  ],
+  "generic": [
+    "Viero-Shuttle"
+  ],
+  "skip": [
+    "ai-autodispatch",
+    "ai-route-eta",
+    "fleet-cards-frontend",
+    "fuel-logistics-frontend",
+    "idp-frontend",
+    "shuttle-app"
+  ]
+}
