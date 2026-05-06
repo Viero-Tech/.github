@@ -11,5 +11,6 @@ on:
 jobs:
   review:
     uses: Viero-Tech/.github/.github/workflows/reusable-claude-review.yml@main
-    secrets:
-      claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+    with:
+      aws_role_arn: ${{ vars.AWS_BEDROCK_ROLE_ARN }}
+      aws_region: ${{ vars.AWS_BEDROCK_REGION }}
