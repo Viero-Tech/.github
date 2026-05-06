@@ -10,6 +10,15 @@ on:
   issues:
     types: [opened, assigned]
 
+# Caller-side permissions for the mention flow. Mention mode allows code
+# edits when the user explicitly asks, so contents:write is included.
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+
 jobs:
   claude:
     uses: Viero-Tech/.github/.github/workflows/reusable-claude-mention.yml@main
