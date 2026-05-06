@@ -1,0 +1,43 @@
+name: Claude Code Mention (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      extra_prompt:
+        description: 'Repo-specific extra context (rarely used in mention mode; user-driven)'
+        type: string
+        default: ''
+      claude_args_extra:
+        description: 'Extra CLI flags appended to claude_args (e.g. --model claude-opus-4-7)'
+        type: string
+        default: ''
+    secrets:
+      claude_oauth_token:
+        description: 'CLAUDE_CODE_OAUTH_TOKEN (org-level secret)'
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read # so Claude can read CI run logs when asked
+
+jobs:
+  claude:
+    # Only fire when the triggering event body contains @claude.
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.2.2
+        with:
+          fetch-depth: 1
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.claude_oauth_token }}
+          claude_args: |
+            ${{ inputs.claude_args_extra }}
