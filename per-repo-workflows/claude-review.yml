@@ -8,6 +8,14 @@ on:
       - 'docs/**'
       - '.gitignore'
 
+# Caller-side permissions: a reusable workflow's permissions cannot exceed
+# what the caller grants. Org default is read-only, so we declare what the
+# Bedrock + review-comment flow needs.
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
 jobs:
   review:
     uses: Viero-Tech/.github/.github/workflows/reusable-claude-review.yml@main
