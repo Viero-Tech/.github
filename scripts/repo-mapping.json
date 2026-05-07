@@ -1,6 +1,6 @@
 {
   "nestjs": [
-    "fuel-logistics-backend",
+    "fuel-logistics-be",
     "total-platform-be",
     "total-driver-be",
     "total-customer-be",
@@ -8,39 +8,46 @@
     "transit-driver-be",
     "unigaz-platform-be",
     "unigaz-driver-be",
-    "fleet-cards-backend",
-    "idp-backend",
-    "generalized-platform-backend"
+    "fleet-cards-be",
+    "idp-be",
+    "generalized-platform-be",
+    "shuttle-be"
   ],
   "nextjs": [
     "total-platform-fe",
     "transit-platform-fe",
-    "unigaz-platform-fe"
+    "unigaz-platform-fe",
+    "fleet-cards-fe",
+    "fuel-logistics-fe"
   ],
   "flutter": [
     "fuel-logistics-driver-app",
     "total-driver-app",
     "total-customer-app",
     "transit-driver-app",
-    "unigaz-driver-app"
+    "unigaz-driver-app",
+    "fleet-cards-app",
+    "shuttle-app"
   ],
   "prisma": [
     "total-centralized-prisma",
     "transit-centralized-prisma",
-    "unigaz-centralized-prisma"
+    "unigaz-centralized-prisma",
+    "idp-prisma"
   ],
   "python": [
     "ai-route-optimization"
   ],
   "generic": [
-    "Viero-Shuttle"
+    "viero-shuttle"
   ],
   "skip": [
     "ai-autodispatch",
     "ai-route-eta",
-    "fleet-cards-frontend",
-    "fuel-logistics-frontend",
-    "idp-frontend",
-    "shuttle-app"
+    "idp-fe",
+    "shuttle-fe",
+    "viero-site",
+    "viero-platform-ops",
+    "viero-platform-infra"
   ]
 }
