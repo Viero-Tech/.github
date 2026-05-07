@@ -123,7 +123,7 @@ deploy_repo() {
 - \`.github/workflows/claude-mention.yml\`: respond to \`@claude\` mentions in PR comments / reviews / issues
 $([ "$NO_CLAUDE_MD" = "0" ] && echo "- \`CLAUDE.md\`: per-stack code-review conventions (template: \`$template_name\`)")
 
-**Auth:** \`CLAUDE_CODE_OAUTH_TOKEN\` is an org-level secret available to all repos.
+**Auth:** AWS Bedrock via OIDC. Org vars \`AWS_BEDROCK_ROLE_ARN\` + \`AWS_BEDROCK_REGION\` resolve at workflow runtime; the IAM role's trust policy is scoped to \`repo:Viero-Tech/*\`.
 
 **No code changes.** Pure config addition. CI on this PR should pass; the new \`Claude Code Review\` workflow will fire on subsequent pushes." 2>&1 | tail -3
 
