@@ -12,6 +12,19 @@ on:
         # than 9 (e.g. fleet-cards-be uses pnpm@10).
         type: string
         default: '9'
+      submodules:
+        # Passed verbatim to actions/checkout. Set to 'recursive' for repos
+        # that consume git submodules (e.g. fleet-cards-be has
+        # prisma/idp-views/ as a submodule of Viero-Tech/idp-prisma).
+        type: string
+        default: 'false'
+      prisma-generate:
+        # Set true for Prisma repos: runs `pnpm prisma generate` after
+        # install in typecheck + test jobs. Required when the source tree
+        # imports from `generated/prisma/client` (or any Prisma-emitted
+        # output path) because the generated client is not committed.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -26,6 +39,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.2.2
+        with:
+          submodules: ${{ inputs.submodules }}
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
           version: ${{ inputs.pnpm-version }}
@@ -44,6 +59,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.2.2
+        with:
+          submodules: ${{ inputs.submodules }}
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
           version: ${{ inputs.pnpm-version }}
@@ -56,12 +73,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - if: ${{ inputs.prisma-generate }}
+        run: pnpm prisma generate
       - run: pnpm tsc --noEmit
 
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.2.2
+        with:
+          submodules: ${{ inputs.submodules }}
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
           version: ${{ inputs.pnpm-version }}
@@ -74,4 +95,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - if: ${{ inputs.prisma-generate }}
+        run: pnpm prisma generate
       - run: pnpm test -- --passWithNoTests
