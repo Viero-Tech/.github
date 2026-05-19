@@ -28,3 +28,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm prisma validate
       - run: pnpm prisma generate
+
+  # Single aggregator check the org ruleset can require uniformly across
+  # all reusable-ci-* workflows. Caller convention: name the calling job
+  # `ci`, so this surfaces as `ci / ci-summary` on the PR.
+  ci-summary:
+    if: always()
+    needs: [validate]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all CI jobs passed
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "::error::At least one required CI job failed or was cancelled"
+            exit 1
+          fi
+          echo "All CI jobs passed."
