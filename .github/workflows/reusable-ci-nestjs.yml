@@ -97,4 +97,4 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - if: ${{ inputs.prisma-generate }}
         run: pnpm prisma generate
-      - run: pnpm test --passWithNoTests
+      - run: pnpm test
