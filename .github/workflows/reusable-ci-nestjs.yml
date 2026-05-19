@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: read
+  packages: read  # for private @viero-tech packages on GitHub Packages
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -32,7 +33,11 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           cache: 'pnpm'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@viero-tech'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: pnpm eslint . --max-warnings=0 || true  # TODO: remove || true once repo lint is clean
 
   typecheck:
@@ -46,7 +51,11 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           cache: 'pnpm'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@viero-tech'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: pnpm tsc --noEmit
 
   test:
@@ -60,5 +69,9 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           cache: 'pnpm'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@viero-tech'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: pnpm test -- --passWithNoTests
