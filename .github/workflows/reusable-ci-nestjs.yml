@@ -25,20 +25,25 @@ on:
         # output path) because the generated client is not committed.
         type: boolean
         default: false
+    secrets:
       ssh-key:
         # SSH private key for cloning private submodules from a DIFFERENT
         # repo in the same org. The default GITHUB_TOKEN is repo-scoped and
         # cannot clone other private repos, so submodule fetches across
         # repos fail with a 404 unless a credential is supplied. Pass the
         # private half of a read-only deploy key registered on the
-        # submodule repo (e.g. Viero-Tech/idp-prisma). Caller convention:
+        # submodule repo (e.g. Viero-Tech/idp-prisma).
+        #
+        # Must be passed as a SECRET, not an input. GitHub rejects
+        # `${{ secrets.X }}` in `with:` blocks of reusable workflow calls
+        # at parse time. Caller convention:
         #   with:
         #     submodules: 'recursive'
+        #   secrets:
         #     ssh-key: ${{ secrets.IDP_PRISMA_DEPLOY_KEY }}
-        # Empty default = no change for existing callers. actions/checkout
-        # uses the default token when ssh-key is empty.
-        type: string
-        default: ''
+        # When omitted, actions/checkout falls back to the default token
+        # (existing behavior for callers without cross-repo submodules).
+        required: false
 
 permissions:
   contents: read
@@ -55,7 +60,7 @@ jobs:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.2.2
         with:
           submodules: ${{ inputs.submodules }}
-          ssh-key: ${{ inputs.ssh-key }}
+          ssh-key: ${{ secrets.ssh-key }}
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
           version: ${{ inputs.pnpm-version }}
@@ -76,7 +81,7 @@ jobs:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.2.2
         with:
           submodules: ${{ inputs.submodules }}
-          ssh-key: ${{ inputs.ssh-key }}
+          ssh-key: ${{ secrets.ssh-key }}
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
           version: ${{ inputs.pnpm-version }}
@@ -99,7 +104,7 @@ jobs:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.2.2
         with:
           submodules: ${{ inputs.submodules }}
-          ssh-key: ${{ inputs.ssh-key }}
+          ssh-key: ${{ secrets.ssh-key }}
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
           version: ${{ inputs.pnpm-version }}
