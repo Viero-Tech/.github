@@ -15,6 +15,10 @@ on:
         description: 'Bedrock model ID. Cross-region inference profiles recommended.'
         type: string
         default: 'us.anthropic.claude-sonnet-4-6'
+      max_output_tokens:
+        description: 'Cap on output tokens per model call. Bedrock reserves (input + max_tokens) up front. Higher than review since mentions may write code. Claude 3.7+ output burns at 5x.'
+        type: string
+        default: '32000'
       extra_prompt:
         description: 'Repo-specific extra context (rarely used in mention mode; user-driven)'
         type: string
@@ -52,6 +56,10 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           use_bedrock: 'true'
+          # Cap output tokens: Bedrock reserves (input + max_tokens) against the
+          # TPM/TPD quota at request start. See AWS Bedrock token burndown docs.
+          settings: |
+            { "env": { "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "${{ inputs.max_output_tokens }}" } }
           claude_args: |
             --model ${{ inputs.bedrock_model_id }}
             ${{ inputs.claude_args_extra }}
