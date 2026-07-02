@@ -54,7 +54,7 @@ jobs:
           node-version: ${{ inputs.node-version }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test --passWithNoTests
+      - run: pnpm test -- --passWithNoTests
 
   # Single aggregator check the org ruleset can require uniformly across
   # all reusable-ci-* workflows. Caller convention: name the calling job
