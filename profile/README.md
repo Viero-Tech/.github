@@ -1,25 +1,20 @@
-## Viero Tech
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Viero-Tech/.github/main/profile/viero-logo-dark.svg">
+    <img alt="Viero" src="https://raw.githubusercontent.com/Viero-Tech/.github/main/profile/viero-logo-light.svg" width="320">
+  </picture>
+</p>
 
-Logistics and fintech platform powering fuel delivery, fleet management, and driver operations across the Middle East.
+<h3 align="center">Fleet. Fuel. Finance. Unified.</h3>
 
-### Products
-- **Fuel Logistics** -- Multi-tenant fuel delivery platform (admin dashboards, driver apps, route optimization)
-- **Fleet Cards** -- Fleet fuel card management system
-- **Identity Platform** -- Centralized authentication and tenant administration
-- **AI Services** -- Route optimization, auto-dispatching, and ETA prediction
-- **Shuttle** -- Employee shuttle management
+Viero is a B2B technology company building software for fleet and mobility operations. We automate mission-critical logistics workflows across industries and provide the fintech layer that controls the spend behind them, replacing spreadsheets, calls and reactive coordination with control, visibility and automation.
 
-### Tech Stack
-NestJS, Next.js, Flutter, FastAPI, PostgreSQL, Prisma, GKE, ArgoCD
+## Technology
 
-### Org-wide CI
+NestJS and Prisma on PostgreSQL, Next.js, Flutter, Python for AI services, and Kubernetes with Flux CD on Google Cloud and AWS.
 
-Reusable workflows in this repo (consumed via `uses: Viero-Tech/.github/.github/workflows/<name>@main`):
+Product repositories are private. This repository holds the CI workflows and templates shared across them.
 
-- `reusable-ci-nestjs.yml`, `reusable-ci-nextjs.yml`, `reusable-ci-prisma.yml`, `reusable-ci-flutter.yml`, `reusable-ci-python.yml`, `reusable-ci-generic.yml`: stack-specific lint, typecheck, test
-- `reusable-claude-review.yml`: auto-review every PR (opened, synchronize, reopened, ready-for-review). Sticky comment, draft skip, concurrency cancel
-- `reusable-claude-mention.yml`: respond to `@claude` mentions in PR comments, reviews, and issues
-
-Per-repo caller stubs live in `per-repo-workflows/`. Drop a stub into a repo's `.github/workflows/` to opt in.
-
-[getviero.com](https://getviero.com)
+<p align="center">
+  <a href="https://getviero.com">getviero.com</a> &middot; <a href="mailto:info@getviero.com">info@getviero.com</a>
+</p>
