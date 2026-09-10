@@ -5,6 +5,14 @@ on:
       node-version:
         type: string
         default: '22'
+      pnpm-version:
+        # Empty by default: pnpm/action-setup@v4 reads the version from the
+        # `packageManager` field in the repository's package.json. Supplying a
+        # version here as well makes the action fail with "Multiple versions of
+        # pnpm specified", so set this only for a repository that pins no
+        # `packageManager` field.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -18,29 +26,139 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job here pushes or fetches a submodule, so the job token does not
+          # need to persist into .git/config where package lifecycle scripts run.
+          persist-credentials: false
+      # A repository that pins neither `packageManager` nor this input would make
+      # pnpm/action-setup throw "No pnpm version is specified" and take its whole CI
+      # with it. An empty output is read as unset by the action, which is what lets
+      # `packageManager` win without tripping its "Multiple versions of pnpm
+      # specified" check.
+      #
+      # The fallback reaches an absent field and an absent package.json, and nothing
+      # else. The action re-reads package.json itself and its catch swallows only
+      # ENOENT, so a file that does not parse, or a `packageManager` naming another
+      # package manager, fails at setup whatever this step emits. That is by design:
+      # both are repository defects that a CI fallback should not paper over.
+      #
+      # TRANSITIONAL. Pinning a major in a workflow is the thing standard 09 C8 and
+      # standard 11 P1 forbid, and this branch exists only because seven callers pin
+      # no `packageManager` and would otherwise lose CI outright: fleet-cards-fe,
+      # generalized-platform-be, idp-fe, unigaz-driver-be, unigaz-platform-be,
+      # unigaz-platform-fe, viero-site. Once every caller pins the field, delete the
+      # branch and let this step fail instead of falling back.
+      - name: Resolve pnpm version
+        id: pnpm
+        env:
+          REQUESTED: ${{ inputs.pnpm-version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const requested = process.env.REQUESTED || "";
+            let resolved = requested;
+            let warn = "";
+            if (!requested) {
+              let pm = "";
+              try {
+                pm = JSON.parse(fs.readFileSync("package.json", "utf8")).packageManager;
+              } catch (err) {
+                pm = "";
+              }
+              if (typeof pm === "string" && pm.indexOf("pnpm@") === 0) {
+                resolved = "";
+              } else {
+                resolved = "9";
+                warn = "no pnpm packageManager field in package.json, falling back to pnpm 9. This fallback is transitional: pin packageManager to an exact version (standard 09 C8) so this repository controls its own pnpm major.";
+              }
+            }
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, "version=" + resolved + "\n");
+            if (warn) { console.log("::warning::" + warn); }
+          '
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
-          version: '9'
+          version: ${{ steps.pnpm.outputs.version }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ inputs.node-version }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
-      - run: pnpm lint || true
+      - run: pnpm lint
 
   typecheck:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No job here pushes or fetches a submodule, so the job token does not
+          # need to persist into .git/config where package lifecycle scripts run.
+          persist-credentials: false
+      # A repository that pins neither `packageManager` nor this input would make
+      # pnpm/action-setup throw "No pnpm version is specified" and take its whole CI
+      # with it. An empty output is read as unset by the action, which is what lets
+      # `packageManager` win without tripping its "Multiple versions of pnpm
+      # specified" check.
+      #
+      # The fallback reaches an absent field and an absent package.json, and nothing
+      # else. The action re-reads package.json itself and its catch swallows only
+      # ENOENT, so a file that does not parse, or a `packageManager` naming another
+      # package manager, fails at setup whatever this step emits. That is by design:
+      # both are repository defects that a CI fallback should not paper over.
+      #
+      # TRANSITIONAL. Pinning a major in a workflow is the thing standard 09 C8 and
+      # standard 11 P1 forbid, and this branch exists only because seven callers pin
+      # no `packageManager` and would otherwise lose CI outright: fleet-cards-fe,
+      # generalized-platform-be, idp-fe, unigaz-driver-be, unigaz-platform-be,
+      # unigaz-platform-fe, viero-site. Once every caller pins the field, delete the
+      # branch and let this step fail instead of falling back.
+      - name: Resolve pnpm version
+        id: pnpm
+        env:
+          REQUESTED: ${{ inputs.pnpm-version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const requested = process.env.REQUESTED || "";
+            let resolved = requested;
+            let warn = "";
+            if (!requested) {
+              let pm = "";
+              try {
+                pm = JSON.parse(fs.readFileSync("package.json", "utf8")).packageManager;
+              } catch (err) {
+                pm = "";
+              }
+              if (typeof pm === "string" && pm.indexOf("pnpm@") === 0) {
+                resolved = "";
+              } else {
+                resolved = "9";
+                warn = "no pnpm packageManager field in package.json, falling back to pnpm 9. This fallback is transitional: pin packageManager to an exact version (standard 09 C8) so this repository controls its own pnpm major.";
+              }
+            }
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, "version=" + resolved + "\n");
+            if (warn) { console.log("::warning::" + warn); }
+          '
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
-          version: '9'
+          version: ${{ steps.pnpm.outputs.version }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ inputs.node-version }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
-      - run: pnpm tsc --noEmit || true
+      # `pnpm exec`, not `pnpm tsc`: pnpm resolves a script name before a binary,
+      # so a repository that later defines a `tsc` script would put `--noEmit`
+      # after a script name. `exec` always means the binary.
+      # Prefer the repository's own typecheck script. This workflow serves repositories
+      # that may keep TypeScript in a workspace package rather than at the root, where a
+      # root `pnpm exec tsc` finds no binary under pnpm's isolated node_modules.
+      - name: Typecheck
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.typecheck ? 0 : 1)"; then
+            pnpm run typecheck
+          else
+            pnpm exec tsc --noEmit
+          fi
 
   # Single aggregator check the org ruleset can require uniformly across
   # all reusable-ci-* workflows. Caller convention: name the calling job
