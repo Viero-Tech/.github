@@ -5,25 +5,15 @@
   </picture>
 </p>
 
-<h3 align="center">Logistics and Fintech</h3>
+<h3 align="center">Fleet. Fuel. Finance. Unified.</h3>
 
-Viero builds the operating layer for fuel and logistics businesses: real-time tracking, fuel control, workflow automation and financial visibility for fleet operators and fuel distributors, in one platform. We are based in Amman, Jordan, and serve operators across the Middle East.
+Viero is a B2B technology company building software for fleet and mobility operations. We automate mission-critical logistics workflows across industries and provide the fintech layer that controls the spend behind them, replacing spreadsheets, calls and reactive coordination with control, visibility and automation.
 
-## What we build
+## Technology
 
-| Product | What it does |
-|---|---|
-| **Fuel Logistics** | Multi-tenant fuel delivery operations: orders, dispatch, driver and customer apps, and live tracking for fuel distributors. |
-| **Fleet Cards** | Fleet fuel spend control: card issuance, transaction monitoring, bank integration and fraud detection for any fleet. |
-| **Shuttle** | Employee transport and workforce mobility management. |
-| **Identity Platform** | Single sign-on and tenant administration shared by every Viero product. |
-| **AI Dispatch** | Route optimization and automatic order dispatching, running against live delivery fleets. |
+NestJS and Prisma on PostgreSQL, Next.js, Flutter, Python for AI services, and Kubernetes with Flux CD on Google Cloud and AWS.
 
-## How we build
-
-TypeScript end to end on the server and the web (NestJS, Next.js, Prisma on PostgreSQL), Flutter for mobile, Python and FastAPI for the AI services. Everything ships as containers to Kubernetes through GitOps with Flux, on Google Cloud and AWS.
-
-Our product repositories are private. This repository holds the CI workflows and templates they share.
+Product repositories are private. This repository holds the CI workflows and templates shared across them.
 
 <p align="center">
   <a href="https://getviero.com">getviero.com</a> &middot; <a href="mailto:info@getviero.com">info@getviero.com</a>
