@@ -1,0 +1,110 @@
+name: pr-policy
+
+# Closes a pull request whose head branch is not the promotion source of its
+# base branch (by default: staging accepts only dev, prod accepts only
+# staging), with a comment, unless the author is an organization owner.
+# GitHub has no native "allowed source branch" rule; this workflow and the
+# branch-policy job of the ci-* workflows together stand in for one.
+#
+# GITHUB_TOKEN cannot read organization membership, so the owner check needs
+# either the membership-token secret (read access to organization members)
+# or an explicit owner-logins list. With neither, the job fails and closes
+# nothing. Contract and inputs: docs/ci-v1.md.
+
+on:
+  workflow_call:
+    inputs:
+      branch-rules:
+        description: Promotion sources as base:head pairs, comma separated.
+        type: string
+        default: 'staging:dev,prod:staging'
+      owner-logins:
+        description: Comma-separated logins treated as owners when no membership-token is passed.
+        type: string
+        default: ''
+    secrets:
+      membership-token:
+        description: Token allowed to read organization membership. Preferred over owner-logins.
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  enforce:
+    # `edited` matters only when the base branch changed.
+    if: >-
+      github.event_name == 'pull_request' &&
+      (github.event.action != 'edited' || github.event.changes.base != null)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Enforce the promotion source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MEMBERSHIP_TOKEN: ${{ secrets.membership-token }}
+          ORG: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BRANCH_RULES: ${{ inputs.branch-rules }}
+          OWNER_LOGINS: ${{ inputs.owner-logins }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BRANCH_RULES" =~ ^[A-Za-z0-9._/:,-]*$ ]]; then
+            echo "::error::branch-rules may only hold base:head pairs separated by commas"
+            exit 1
+          fi
+          required_head=""
+          IFS=',' read -r -a rules <<< "$BRANCH_RULES"
+          for rule in "${rules[@]}"; do
+            base="${rule%%:*}"
+            head="${rule#*:}"
+            if [ -z "$base" ] || [ -z "$head" ] || [ "$base" = "$rule" ]; then
+              echo "::error::branch-rules entry '$rule' is not base:head"
+              exit 1
+            fi
+            if [ "$base" = "$BASE_REF" ]; then required_head="$head"; fi
+          done
+          if [ -z "$required_head" ] || [ "$HEAD_REF" = "$required_head" ]; then
+            echo "'$HEAD_REF' into '$BASE_REF' is allowed."
+            exit 0
+          fi
+
+          is_owner=false
+          if [ -n "$MEMBERSHIP_TOKEN" ]; then
+            error_log=$(mktemp)
+            if role=$(GH_TOKEN="$MEMBERSHIP_TOKEN" gh api "orgs/$ORG/memberships/$AUTHOR" --jq '.role' 2> "$error_log"); then
+              if [ "$role" = admin ]; then is_owner=true; fi
+            elif grep -q 'HTTP 404' "$error_log"; then
+              is_owner=false
+            else
+              cat "$error_log"
+              echo "::error::Could not read the organization membership of '$AUTHOR'; nothing was closed."
+              exit 1
+            fi
+          elif [ -n "$OWNER_LOGINS" ]; then
+            IFS=',' read -r -a owners <<< "$OWNER_LOGINS"
+            for owner in "${owners[@]}"; do
+              owner="${owner// /}"
+              if [ "${owner,,}" = "${AUTHOR,,}" ]; then is_owner=true; fi
+            done
+          else
+            echo "::error::Pass the membership-token secret or the owner-logins input so owners can be recognised; nothing was closed."
+            exit 1
+          fi
+
+          if [ "$is_owner" = true ]; then
+            echo "::notice::'$HEAD_REF' into '$BASE_REF' is outside the promotion path; left open because the author is an organization owner (hotfix)."
+            exit 0
+          fi
+
+          body=$(printf '%s\n\n%s\n\n%s' \
+            "Thank you for the pull request. Changes reach \`$BASE_REF\` only from \`$required_head\`, so this pull request from \`$HEAD_REF\` was closed automatically." \
+            "Please open it against \`$required_head\` instead; it reaches \`$BASE_REF\` with the next promotion." \
+            "An urgent fix that must skip the promotion path is opened by an organization owner.")
+          gh pr close "$PR_NUMBER" --repo "$REPO" --comment "$body"
+          echo "::notice::Closed: '$HEAD_REF' is not the promotion source of '$BASE_REF'."
