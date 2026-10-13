@@ -1,0 +1,8 @@
+{
+  "name": "fixture-nextjs-workspace",
+  "private": true,
+  "packageManager": "pnpm@10.28.1",
+  "pnpm": {
+    "onlyBuiltDependencies": ["sharp", "unrs-resolver"]
+  }
+}

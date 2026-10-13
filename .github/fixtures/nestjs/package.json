@@ -1,0 +1,15 @@
+{
+  "name": "fixture-nestjs-workspace",
+  "private": true,
+  "packageManager": "pnpm@10.28.1",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma"
+    ],
+    "overrides": {
+      "deepmerge-ts": "^8.0.0"
+    }
+  }
+}
