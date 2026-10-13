@@ -1,0 +1,557 @@
+name: ci-nextjs
+
+# Shared CI for a Next.js (or any Node + TypeScript) frontend installed with pnpm.
+# Contract and inputs: docs/ci-v1.md. Call it from a job named `ci` so the
+# single required check reads `ci / ci-summary`.
+#
+# Versions come from the calling repository: Node from the nearest `.nvmrc`,
+# pnpm from the `packageManager` field next to the lockfile.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory holding the package to check, relative to the repository root.
+        type: string
+        default: '.'
+      prisma:
+        description: Run `prisma generate` after install, before lint, typecheck, build and tests.
+        type: boolean
+        default: false
+      build:
+        description: Run `pnpm run build`.
+        type: boolean
+        default: true
+      test:
+        description: Run the unit tests (`test:ci` when that script exists, otherwise `test`).
+        type: boolean
+        default: true
+      e2e:
+        description: Run the end-to-end script named by e2e-script.
+        type: boolean
+        default: false
+      e2e-script:
+        description: package.json script run by the e2e job.
+        type: string
+        default: 'test:e2e'
+      contract:
+        description: Run the contract script named by contract-script.
+        type: boolean
+        default: false
+      contract-script:
+        description: package.json script run by the contract job.
+        type: string
+        default: 'contract'
+      lint-max-warnings:
+        description: ESLint warning budget. Errors always fail.
+        type: string
+        default: '0'
+      node-options:
+        description: NODE_OPTIONS for the test and e2e jobs, for example --max-old-space-size=6144.
+        type: string
+        default: ''
+      build-env:
+        description: Non-secret KEY=value lines exported to the build job, one per line.
+        type: string
+        default: ''
+      branch-rules:
+        description: Promotion sources as base:head pairs, comma separated.
+        type: string
+        default: 'staging:dev,prod:staging'
+      timeout-minutes:
+        description: Timeout of each lint, typecheck, build, test, contract and audit job.
+        type: number
+        default: 15
+      e2e-timeout-minutes:
+        description: Timeout of the e2e job.
+        type: number
+        default: 30
+    outputs:
+      failed-jobs:
+        description: Space-separated jobs that failed, were cancelled, or were skipped while switched on.
+        value: ${{ jobs.ci-summary.outputs.failed-jobs }}
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs-only: ${{ steps.resolve.outputs.docs-only }}
+      lockfile-changed: ${{ steps.resolve.outputs.lockfile-changed }}
+      install-root: ${{ steps.resolve.outputs.install-root }}
+      lockfile: ${{ steps.resolve.outputs.lockfile }}
+      package-json: ${{ steps.resolve.outputs.package-json }}
+      node-version-file: ${{ steps.resolve.outputs.node-version-file }}
+    steps:
+      # Depth 2 on the pull request merge commit brings its first parent, the
+      # base branch tip, so `git diff HEAD^1 HEAD` is exactly what the PR changes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Resolve toolchain and changes
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+          LINT_MAX_WARNINGS: ${{ inputs.lint-max-warnings }}
+          DATABASE: 'none'
+          DATABASE_IMAGE: ''
+          DATABASE_PORT: '5432'
+          DATABASE_NAME: 'ci'
+          DATABASE_PASSWORD: 'postgres'
+          REQUIRE_DATABASE: 'false'
+          REDIS: 'false'
+          MIGRATE_SCRIPT: ''
+          E2E_SCRIPT: ${{ inputs.e2e-script }}
+          CONTRACT_SCRIPT: ${{ inputs.contract-script }}
+          BUILD_ENV: ${{ inputs.build-env }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          wd="${WORKING_DIRECTORY:-.}"
+          wd="${wd%/}"
+          wd="${wd#./}"
+          if [ -z "$wd" ]; then wd=.; fi
+          case "/$wd/" in
+            //*|*/../*) fail "working-directory must be a relative path inside the repository, got '$WORKING_DIRECTORY'" ;;
+          esac
+          [ -d "$wd" ] || fail "working-directory '$wd' does not exist"
+          [ -f "$wd/package.json" ] || fail "'$wd/package.json' is missing"
+
+          # First directory from the working directory up to the repository
+          # root that holds the named file.
+          nearest_up() {
+            local dir="$wd"
+            while true; do
+              if [ -e "$dir/$1" ]; then
+                printf '%s\n' "$dir"
+                return 0
+              fi
+              if [ "$dir" = . ]; then
+                return 1
+              fi
+              dir=$(dirname "$dir")
+            done
+          }
+          in_dir() {
+            if [ "$1" = . ]; then printf '%s\n' "$2"; else printf '%s/%s\n' "$1" "$2"; fi
+          }
+
+          install_root=$(nearest_up pnpm-lock.yaml) || fail "No pnpm-lock.yaml in '$wd' or any parent directory. Commit the pnpm lockfile."
+          nvmrc_root=$(nearest_up .nvmrc) || fail "No .nvmrc in '$wd' or any parent directory. Add a .nvmrc naming the Node version this repository runs on, for example 22."
+          package_json=$(in_dir "$install_root" package.json)
+          [ -f "$package_json" ] || fail "'$package_json' is missing next to the lockfile"
+          package_manager=$(jq -r '.packageManager // ""' "$package_json") || fail "'$package_json' is not valid JSON"
+          [[ "$package_manager" =~ ^pnpm@[0-9]+\.[0-9]+\.[0-9]+ ]] || fail "'$package_json' has no exact pnpm packageManager field. Add \"packageManager\": \"pnpm@<x.y.z>\" so CI runs the pnpm version the repository pins."
+
+          [[ "$LINT_MAX_WARNINGS" =~ ^[0-9]+$ ]] || fail "lint-max-warnings must be a whole number, got '$LINT_MAX_WARNINGS'"
+          case "$DATABASE" in
+            none) database_image="" ;;
+            postgres) database_image="${DATABASE_IMAGE:-postgres:16-alpine}" ;;
+            postgis) database_image="${DATABASE_IMAGE:-postgis/postgis:16-3.5-alpine}" ;;
+            *) fail "database must be none, postgres or postgis, got '$DATABASE'" ;;
+          esac
+          if [ "$REQUIRE_DATABASE" = true ] && [ "$DATABASE" = none ]; then
+            fail "this workflow needs a database: set database to postgres or postgis"
+          fi
+          [[ "$DATABASE_PORT" =~ ^[0-9]+$ ]] && [ "$DATABASE_PORT" -ge 1024 ] && [ "$DATABASE_PORT" -le 65535 ] || fail "database-port must be a number from 1024 to 65535, got '$DATABASE_PORT'"
+          [[ "$DATABASE_NAME" =~ ^[A-Za-z0-9_]+$ ]] || fail "database-name may only use letters, digits and underscores"
+          [[ "$DATABASE_PASSWORD" =~ ^[A-Za-z0-9_]+$ ]] || fail "database-password may only use letters, digits and underscores"
+          redis_image=""
+          if [ "$REDIS" = true ]; then redis_image="redis:7-alpine"; fi
+          for name in MIGRATE_SCRIPT E2E_SCRIPT CONTRACT_SCRIPT; do
+            value="${!name}"
+            [[ -z "$value" || "$value" =~ ^[A-Za-z0-9:._-]+$ ]] || fail "$name '$value' is not a plain package.json script name"
+          done
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]] || fail "build-env line '$line' is not KEY=value"
+          done <<< "$BUILD_ENV"
+
+          lockfile=$(in_dir "$install_root" pnpm-lock.yaml)
+          docs_only=false
+          lockfile_changed=true
+          if [ "$EVENT_NAME" = pull_request ]; then
+            git rev-parse -q --verify 'HEAD^1' > /dev/null || fail "The pull request base commit is not available. Check out the merge commit with fetch-depth 2."
+            changed=$(git diff --name-only 'HEAD^1' HEAD)
+            if [ -n "$changed" ]; then
+              docs_only=true
+              while IFS= read -r path; do
+                case "$path" in
+                  docs/*|*.md) ;;
+                  *) docs_only=false; break ;;
+                esac
+              done <<< "$changed"
+            fi
+            if grep -qxF "$lockfile" <<< "$changed"; then lockfile_changed=true; else lockfile_changed=false; fi
+          fi
+
+          {
+            echo "docs-only=$docs_only"
+            echo "lockfile-changed=$lockfile_changed"
+            echo "install-root=$install_root"
+            echo "lockfile=$lockfile"
+            echo "package-json=$package_json"
+            echo "node-version-file=$(in_dir "$nvmrc_root" .nvmrc)"
+            echo "database-image=$database_image"
+            echo "redis-image=$redis_image"
+          } >> "$GITHUB_OUTPUT"
+          echo "Package: $wd, install root: $install_root, $package_manager, Node from $(in_dir "$nvmrc_root" .nvmrc)"
+          if [ "$docs_only" = true ]; then
+            echo "::notice::Only documentation changed: the jobs that check code are skipped."
+          fi
+
+  branch-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check promotion source
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          BRANCH_RULES: ${{ inputs.branch-rules }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != pull_request ]; then
+            echo "Not a pull request: no promotion rule applies."
+            exit 0
+          fi
+          if [[ ! "$BRANCH_RULES" =~ ^[A-Za-z0-9._/:,-]*$ ]]; then
+            echo "::error::branch-rules may only hold base:head pairs separated by commas"
+            exit 1
+          fi
+          required_head=""
+          IFS=',' read -r -a rules <<< "$BRANCH_RULES"
+          for rule in "${rules[@]}"; do
+            base="${rule%%:*}"
+            head="${rule#*:}"
+            if [ -z "$base" ] || [ -z "$head" ] || [ "$base" = "$rule" ]; then
+              echo "::error::branch-rules entry '$rule' is not base:head"
+              exit 1
+            fi
+            if [ "$base" = "$BASE_REF" ]; then required_head="$head"; fi
+          done
+          if [ -z "$required_head" ]; then
+            echo "No promotion rule for '$BASE_REF'."
+            exit 0
+          fi
+          if [ "$HEAD_REF" != "$required_head" ]; then
+            echo "::error::A pull request into '$BASE_REF' must come from '$required_head'; this one comes from '$HEAD_REF'. Only an organization owner can merge it, as a hotfix."
+            exit 1
+          fi
+          echo "'$HEAD_REF' into '$BASE_REF' follows the promotion path."
+
+  lint:
+    needs: preflight
+    if: needs.preflight.outputs.docs-only == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: ${{ needs.preflight.outputs.package-json }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: ${{ needs.preflight.outputs.node-version-file }}
+          cache: pnpm
+          cache-dependency-path: ${{ needs.preflight.outputs.lockfile }}
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@viero-tech'
+      - name: Install
+        working-directory: ${{ needs.preflight.outputs.install-root }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm install --frozen-lockfile
+      # Type-aware lint resolves the generated client, so it must exist first.
+      - name: Generate Prisma client
+        if: inputs.prisma
+        run: DATABASE_URL="${DATABASE_URL:-postgresql://placeholder:placeholder@localhost:5432/placeholder}" pnpm exec prisma generate
+      - name: Lint
+        env:
+          MAX_WARNINGS: ${{ inputs.lint-max-warnings }}
+        run: pnpm exec eslint . --max-warnings="$MAX_WARNINGS"
+
+  typecheck:
+    needs: preflight
+    if: needs.preflight.outputs.docs-only == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: ${{ needs.preflight.outputs.package-json }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: ${{ needs.preflight.outputs.node-version-file }}
+          cache: pnpm
+          cache-dependency-path: ${{ needs.preflight.outputs.lockfile }}
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@viero-tech'
+      - name: Install
+        working-directory: ${{ needs.preflight.outputs.install-root }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm install --frozen-lockfile
+      - name: Generate Prisma client
+        if: inputs.prisma
+        run: DATABASE_URL="${DATABASE_URL:-postgresql://placeholder:placeholder@localhost:5432/placeholder}" pnpm exec prisma generate
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+
+  build:
+    needs: preflight
+    if: needs.preflight.outputs.docs-only == 'false' && inputs.build
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: ${{ needs.preflight.outputs.package-json }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: ${{ needs.preflight.outputs.node-version-file }}
+          cache: pnpm
+          cache-dependency-path: ${{ needs.preflight.outputs.lockfile }}
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@viero-tech'
+      - name: Install
+        working-directory: ${{ needs.preflight.outputs.install-root }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm install --frozen-lockfile
+      - name: Generate Prisma client
+        if: inputs.prisma
+        run: DATABASE_URL="${DATABASE_URL:-postgresql://placeholder:placeholder@localhost:5432/placeholder}" pnpm exec prisma generate
+      - name: Export build environment
+        env:
+          BUILD_ENV: ${{ inputs.build-env }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then printf '%s\n' "$line" >> "$GITHUB_ENV"; fi
+          done <<< "$BUILD_ENV"
+      - name: Build
+        run: pnpm run build
+
+  test:
+    needs: preflight
+    if: needs.preflight.outputs.docs-only == 'false' && inputs.test
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      NODE_OPTIONS: ${{ inputs.node-options }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: ${{ needs.preflight.outputs.package-json }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: ${{ needs.preflight.outputs.node-version-file }}
+          cache: pnpm
+          cache-dependency-path: ${{ needs.preflight.outputs.lockfile }}
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@viero-tech'
+      - name: Install
+        working-directory: ${{ needs.preflight.outputs.install-root }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm install --frozen-lockfile
+      - name: Generate Prisma client
+        if: inputs.prisma
+        run: DATABASE_URL="${DATABASE_URL:-postgresql://placeholder:placeholder@localhost:5432/placeholder}" pnpm exec prisma generate
+      # `test:ci` wins when the repository defines it; zero tests fail the
+      # job through the runner's own exit code unless the caller sets test: false.
+      - name: Test
+        run: |
+          set -euo pipefail
+          if jq -e '.scripts["test:ci"]' package.json > /dev/null; then
+            pnpm run test:ci
+          else
+            pnpm run test
+          fi
+
+  e2e:
+    needs: preflight
+    if: needs.preflight.outputs.docs-only == 'false' && inputs.e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.e2e-timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      NODE_OPTIONS: ${{ inputs.node-options }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: ${{ needs.preflight.outputs.package-json }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: ${{ needs.preflight.outputs.node-version-file }}
+          cache: pnpm
+          cache-dependency-path: ${{ needs.preflight.outputs.lockfile }}
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@viero-tech'
+      - name: Install
+        working-directory: ${{ needs.preflight.outputs.install-root }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm install --frozen-lockfile
+      - name: Generate Prisma client
+        if: inputs.prisma
+        run: DATABASE_URL="${DATABASE_URL:-postgresql://placeholder:placeholder@localhost:5432/placeholder}" pnpm exec prisma generate
+      - name: End-to-end tests
+        env:
+          E2E_SCRIPT: ${{ inputs.e2e-script }}
+        run: pnpm run "$E2E_SCRIPT"
+
+  contract:
+    needs: preflight
+    if: needs.preflight.outputs.docs-only == 'false' && inputs.contract
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: ${{ needs.preflight.outputs.package-json }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: ${{ needs.preflight.outputs.node-version-file }}
+          cache: pnpm
+          cache-dependency-path: ${{ needs.preflight.outputs.lockfile }}
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@viero-tech'
+      - name: Install
+        working-directory: ${{ needs.preflight.outputs.install-root }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm install --frozen-lockfile
+      - name: Generate Prisma client
+        if: inputs.prisma
+        run: DATABASE_URL="${DATABASE_URL:-postgresql://placeholder:placeholder@localhost:5432/placeholder}" pnpm exec prisma generate
+      - name: Contract
+        env:
+          CONTRACT_SCRIPT: ${{ inputs.contract-script }}
+        run: pnpm run "$CONTRACT_SCRIPT"
+
+  # Runs only when the pull request changes the lockfile, so an advisory
+  # published against an untouched tree never blocks unrelated work.
+  audit:
+    needs: preflight
+    if: needs.preflight.outputs.docs-only == 'false' && needs.preflight.outputs.lockfile-changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ needs.preflight.outputs.install-root }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: ${{ needs.preflight.outputs.package-json }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: ${{ needs.preflight.outputs.node-version-file }}
+      # An accepted advisory belongs in the repository's own pnpm audit
+      # configuration, where it is reviewed, not behind a flag here.
+      - name: Audit dependencies
+        run: pnpm audit --audit-level=high
+
+  ci-summary:
+    if: always()
+    needs: [preflight, branch-policy, lint, typecheck, build, test, e2e, contract, audit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      failed-jobs: ${{ steps.summarise.outputs.failed-jobs }}
+    steps:
+      # Each line: job, result, whether the job was switched on. A skip is
+      # accepted only for a job switched off by its input, by a docs-only
+      # change, or (audit) by an unchanged lockfile.
+      - name: Summarise job results
+        id: summarise
+        env:
+          JOB_STATES: |
+            preflight ${{ needs.preflight.result }} true
+            branch-policy ${{ needs.branch-policy.result }} true
+            lint ${{ needs.lint.result }} ${{ needs.preflight.outputs.docs-only == 'false' }}
+            typecheck ${{ needs.typecheck.result }} ${{ needs.preflight.outputs.docs-only == 'false' }}
+            build ${{ needs.build.result }} ${{ needs.preflight.outputs.docs-only == 'false' && inputs.build }}
+            test ${{ needs.test.result }} ${{ needs.preflight.outputs.docs-only == 'false' && inputs.test }}
+            e2e ${{ needs.e2e.result }} ${{ needs.preflight.outputs.docs-only == 'false' && inputs.e2e }}
+            contract ${{ needs.contract.result }} ${{ needs.preflight.outputs.docs-only == 'false' && inputs.contract }}
+            audit ${{ needs.audit.result }} ${{ needs.preflight.outputs.docs-only == 'false' && needs.preflight.outputs.lockfile-changed == 'true' }}
+        run: |
+          set -euo pipefail
+          failed=""
+          while read -r job result enabled; do
+            [ -n "$job" ] || continue
+            case "$result" in
+              success)
+                echo "$job: success"
+                ;;
+              skipped)
+                if [ "$enabled" = true ]; then
+                  echo "::error::$job was skipped although it is switched on"
+                  failed="$failed $job"
+                else
+                  echo "$job: skipped by design"
+                fi
+                ;;
+              *)
+                echo "::error::$job finished with '$result'"
+                failed="$failed $job"
+                ;;
+            esac
+          done <<< "$JOB_STATES"
+          failed="${failed# }"
+          echo "failed-jobs=$failed" >> "$GITHUB_OUTPUT"
+          if [ -n "$failed" ]; then
+            echo "::error::CI failed: $failed"
+            exit 1
+          fi
+          echo "Every enabled job passed."
