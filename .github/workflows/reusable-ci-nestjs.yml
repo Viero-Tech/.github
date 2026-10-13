@@ -21,7 +21,7 @@ on:
         default: 'false'
       prisma-generate:
         # Set true for Prisma repos: runs `pnpm prisma generate` after
-        # install in typecheck + test jobs. Required when the source tree
+        # install in lint, typecheck, test and contract jobs. Required when the source tree
         # imports from `generated/prisma/client` (or any Prisma-emitted
         # output path) because the generated client is not committed.
         type: boolean
@@ -146,6 +146,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Type-aware ESLint resolves imports from the generated client, so without
+      # it every Prisma type reads as an error and the lint gate can never pass.
+      - if: ${{ inputs.prisma-generate }}
+        run: pnpm prisma generate
       # `pnpm exec`, not `pnpm eslint`: pnpm resolves a script name before a
       # binary, so a repository that later defines an `eslint` script would put
       # `--max-warnings=0` after a script name, which is the version-dependent
