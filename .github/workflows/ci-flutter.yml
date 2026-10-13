@@ -1,0 +1,233 @@
+name: ci-flutter
+
+# Shared CI for a Flutter app or package.
+# Contract and inputs: docs/ci-v1.md. Call it from a job named `ci` so the
+# single required check reads `ci / ci-summary`.
+#
+# The Flutter version is a required input: the action can read it from
+# pubspec.yaml only when the file pins an exact `environment: flutter:`
+# version, which a Dart SDK range such as `^3.8.1` is not.
+
+on:
+  workflow_call:
+    inputs:
+      flutter-version:
+        description: Exact Flutter SDK version, for example 3.35.7.
+        type: string
+        required: true
+      working-directory:
+        description: Directory holding pubspec.yaml, relative to the repository root.
+        type: string
+        default: '.'
+      test:
+        description: Run flutter test. A missing test directory is a failure.
+        type: boolean
+        default: true
+      branch-rules:
+        description: Promotion sources as base:head pairs, comma separated.
+        type: string
+        default: 'staging:dev,prod:staging'
+      timeout-minutes:
+        description: Timeout of each lint and test job.
+        type: number
+        default: 15
+    outputs:
+      failed-jobs:
+        description: Space-separated jobs that failed, were cancelled, or were skipped while switched on.
+        value: ${{ jobs.ci-summary.outputs.failed-jobs }}
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs-only: ${{ steps.resolve.outputs.docs-only }}
+    steps:
+      # Depth 2 on the pull request merge commit brings its first parent, the
+      # base branch tip, so `git diff HEAD^1 HEAD` is exactly what the PR changes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Resolve toolchain and changes
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+          FLUTTER_VERSION: ${{ inputs.flutter-version }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          wd="${WORKING_DIRECTORY:-.}"
+          wd="${wd%/}"
+          wd="${wd#./}"
+          if [ -z "$wd" ]; then wd=.; fi
+          case "/$wd/" in
+            //*|*/../*) fail "working-directory must be a relative path inside the repository, got '$WORKING_DIRECTORY'" ;;
+          esac
+          [ -d "$wd" ] || fail "working-directory '$wd' does not exist"
+          [ -f "$wd/pubspec.yaml" ] || fail "'$wd/pubspec.yaml' is missing"
+          [[ "$FLUTTER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "flutter-version must be an exact version such as 3.35.7, got '$FLUTTER_VERSION'"
+
+          docs_only=false
+          if [ "$EVENT_NAME" = pull_request ]; then
+            git rev-parse -q --verify 'HEAD^1' > /dev/null || fail "The pull request base commit is not available. Check out the merge commit with fetch-depth 2."
+            changed=$(git diff --name-only 'HEAD^1' HEAD)
+            if [ -n "$changed" ]; then
+              docs_only=true
+              while IFS= read -r path; do
+                case "$path" in
+                  docs/*|*.md) ;;
+                  *) docs_only=false; break ;;
+                esac
+              done <<< "$changed"
+            fi
+          fi
+
+          echo "docs-only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "Project: $wd, Flutter $FLUTTER_VERSION"
+          if [ "$docs_only" = true ]; then
+            echo "::notice::Only documentation changed: analyze and tests are skipped."
+          fi
+
+  branch-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check promotion source
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          BRANCH_RULES: ${{ inputs.branch-rules }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != pull_request ]; then
+            echo "Not a pull request: no promotion rule applies."
+            exit 0
+          fi
+          if [[ ! "$BRANCH_RULES" =~ ^[A-Za-z0-9._/:,-]*$ ]]; then
+            echo "::error::branch-rules may only hold base:head pairs separated by commas"
+            exit 1
+          fi
+          required_head=""
+          IFS=',' read -r -a rules <<< "$BRANCH_RULES"
+          for rule in "${rules[@]}"; do
+            base="${rule%%:*}"
+            head="${rule#*:}"
+            if [ -z "$base" ] || [ -z "$head" ] || [ "$base" = "$rule" ]; then
+              echo "::error::branch-rules entry '$rule' is not base:head"
+              exit 1
+            fi
+            if [ "$base" = "$BASE_REF" ]; then required_head="$head"; fi
+          done
+          if [ -z "$required_head" ]; then
+            echo "No promotion rule for '$BASE_REF'."
+            exit 0
+          fi
+          if [ "$HEAD_REF" != "$required_head" ]; then
+            echo "::error::A pull request into '$BASE_REF' must come from '$required_head'; this one comes from '$HEAD_REF'. Only an organization owner can merge it, as a hotfix."
+            exit 1
+          fi
+          echo "'$HEAD_REF' into '$BASE_REF' follows the promotion path."
+
+  # flutter analyze treats errors, warnings and infos as fatal, so this job
+  # also catches type errors (Dart has no separate typecheck step).
+  lint:
+    needs: preflight
+    if: needs.preflight.outputs.docs-only == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ inputs.flutter-version }}
+          cache: true
+      - name: Get packages
+        run: flutter pub get
+      - name: Analyze
+        run: flutter analyze
+
+  test:
+    needs: preflight
+    if: needs.preflight.outputs.docs-only == 'false' && inputs.test
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ inputs.flutter-version }}
+          cache: true
+      - name: Get packages
+        run: flutter pub get
+      - name: Test
+        run: flutter test
+
+  ci-summary:
+    if: always()
+    needs: [preflight, branch-policy, lint, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      failed-jobs: ${{ steps.summarise.outputs.failed-jobs }}
+    steps:
+      # Each line: job, result, whether the job was switched on. A skip is
+      # accepted only for a job switched off by its input or by a docs-only
+      # change.
+      - name: Summarise job results
+        id: summarise
+        env:
+          JOB_STATES: |
+            preflight ${{ needs.preflight.result }} true
+            branch-policy ${{ needs.branch-policy.result }} true
+            lint ${{ needs.lint.result }} ${{ needs.preflight.outputs.docs-only == 'false' }}
+            test ${{ needs.test.result }} ${{ needs.preflight.outputs.docs-only == 'false' && inputs.test }}
+        run: |
+          set -euo pipefail
+          failed=""
+          while read -r job result enabled; do
+            [ -n "$job" ] || continue
+            case "$result" in
+              success)
+                echo "$job: success"
+                ;;
+              skipped)
+                if [ "$enabled" = true ]; then
+                  echo "::error::$job was skipped although it is switched on"
+                  failed="$failed $job"
+                else
+                  echo "$job: skipped by design"
+                fi
+                ;;
+              *)
+                echo "::error::$job finished with '$result'"
+                failed="$failed $job"
+                ;;
+            esac
+          done <<< "$JOB_STATES"
+          failed="${failed# }"
+          echo "failed-jobs=$failed" >> "$GITHUB_OUTPUT"
+          if [ -n "$failed" ]; then
+            echo "::error::CI failed: $failed"
+            exit 1
+          fi
+          echo "Every enabled job passed."
