@@ -186,7 +186,9 @@ jobs:
           if [ "$REQUIRE_DATABASE" = true ] && [ "$DATABASE" = none ]; then
             fail "this workflow needs a database: set database to postgres or postgis"
           fi
-          [[ "$DATABASE_PORT" =~ ^[0-9]+$ ]] && [ "$DATABASE_PORT" -ge 1024 ] && [ "$DATABASE_PORT" -le 65535 ] || fail "database-port must be a number from 1024 to 65535, got '$DATABASE_PORT'"
+          if ! { [[ "$DATABASE_PORT" =~ ^[0-9]+$ ]] && [ "$DATABASE_PORT" -ge 1024 ] && [ "$DATABASE_PORT" -le 65535 ]; }; then
+            fail "database-port must be a number from 1024 to 65535, got '$DATABASE_PORT'"
+          fi
           [[ "$DATABASE_NAME" =~ ^[A-Za-z0-9_]+$ ]] || fail "database-name may only use letters, digits and underscores"
           [[ "$DATABASE_PASSWORD" =~ ^[A-Za-z0-9_]+$ ]] || fail "database-password may only use letters, digits and underscores"
           redis_image=""
