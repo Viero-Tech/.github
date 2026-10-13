@@ -1,0 +1,347 @@
+name: ci-python
+
+# Shared CI for a Python service installed with pip from requirements files.
+# Contract and inputs: docs/ci-v1.md. Call it from a job named `ci` so the
+# single required check reads `ci / ci-summary`.
+#
+# Versions come from the calling repository: Python from the nearest
+# `.python-version`, and ruff, pytest and mypy from its dev requirements file.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory holding the Python project, relative to the repository root.
+        type: string
+        default: '.'
+      requirements-file:
+        description: Runtime requirements, relative to working-directory.
+        type: string
+        default: 'requirements.txt'
+      dev-requirements-file:
+        description: Tooling requirements (ruff, pytest, mypy when enabled), relative to working-directory.
+        type: string
+        default: 'requirements-dev.txt'
+      mypy:
+        description: Run mypy as the typecheck job. Its configuration lives in the repository.
+        type: boolean
+        default: false
+      test:
+        description: Run pytest. No tests collected is a failure.
+        type: boolean
+        default: true
+      branch-rules:
+        description: Promotion sources as base:head pairs, comma separated.
+        type: string
+        default: 'staging:dev,prod:staging'
+      timeout-minutes:
+        description: Timeout of each lint, typecheck, test and audit job.
+        type: number
+        default: 15
+    outputs:
+      failed-jobs:
+        description: Space-separated jobs that failed, were cancelled, or were skipped while switched on.
+        value: ${{ jobs.ci-summary.outputs.failed-jobs }}
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs-only: ${{ steps.resolve.outputs.docs-only }}
+      requirements-changed: ${{ steps.resolve.outputs.requirements-changed }}
+      python-version-file: ${{ steps.resolve.outputs.python-version-file }}
+      requirements: ${{ steps.resolve.outputs.requirements }}
+      dev-requirements: ${{ steps.resolve.outputs.dev-requirements }}
+    steps:
+      # Depth 2 on the pull request merge commit brings its first parent, the
+      # base branch tip, so `git diff HEAD^1 HEAD` is exactly what the PR changes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Resolve toolchain and changes
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+          REQUIREMENTS_FILE: ${{ inputs.requirements-file }}
+          DEV_REQUIREMENTS_FILE: ${{ inputs.dev-requirements-file }}
+          MYPY: ${{ inputs.mypy }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          wd="${WORKING_DIRECTORY:-.}"
+          wd="${wd%/}"
+          wd="${wd#./}"
+          if [ -z "$wd" ]; then wd=.; fi
+          case "/$wd/" in
+            //*|*/../*) fail "working-directory must be a relative path inside the repository, got '$WORKING_DIRECTORY'" ;;
+          esac
+          [ -d "$wd" ] || fail "working-directory '$wd' does not exist"
+
+          nearest_up() {
+            local dir="$wd"
+            while true; do
+              if [ -e "$dir/$1" ]; then
+                printf '%s\n' "$dir"
+                return 0
+              fi
+              if [ "$dir" = . ]; then
+                return 1
+              fi
+              dir=$(dirname "$dir")
+            done
+          }
+          in_dir() {
+            if [ "$1" = . ]; then printf '%s\n' "$2"; else printf '%s/%s\n' "$1" "$2"; fi
+          }
+
+          version_root=$(nearest_up .python-version) || fail "No .python-version in '$wd' or any parent directory. Add a .python-version naming the Python version this service runs on, for example 3.11."
+          for name in REQUIREMENTS_FILE DEV_REQUIREMENTS_FILE; do
+            value="${!name}"
+            case "/$value/" in
+              //*|*/../*) fail "$name must be a relative path inside working-directory, got '$value'" ;;
+            esac
+          done
+          requirements=$(in_dir "$wd" "$REQUIREMENTS_FILE")
+          dev_requirements=$(in_dir "$wd" "$DEV_REQUIREMENTS_FILE")
+          [ -f "$requirements" ] || fail "'$requirements' is missing. Commit the runtime requirements file."
+          [ -f "$dev_requirements" ] || fail "'$dev_requirements' is missing. Add it with pinned ruff and pytest (and mypy when mypy is on)."
+          for tool in ruff pytest; do
+            grep -Eiq "^${tool}([=<>~! \[]|$)" "$dev_requirements" || fail "'$dev_requirements' does not list $tool. Pin it there so CI and developers run the same version."
+          done
+          if [ "$MYPY" = true ]; then
+            grep -Eiq '^mypy([=<>~! \[]|$)' "$dev_requirements" || fail "'$dev_requirements' does not list mypy, which the caller switched on."
+          fi
+
+          docs_only=false
+          requirements_changed=true
+          if [ "$EVENT_NAME" = pull_request ]; then
+            git rev-parse -q --verify 'HEAD^1' > /dev/null || fail "The pull request base commit is not available. Check out the merge commit with fetch-depth 2."
+            changed=$(git diff --name-only 'HEAD^1' HEAD)
+            if [ -n "$changed" ]; then
+              docs_only=true
+              while IFS= read -r path; do
+                case "$path" in
+                  docs/*|*.md) ;;
+                  *) docs_only=false; break ;;
+                esac
+              done <<< "$changed"
+            fi
+            if grep -qxF -e "$requirements" -e "$dev_requirements" <<< "$changed"; then requirements_changed=true; else requirements_changed=false; fi
+          fi
+
+          {
+            echo "docs-only=$docs_only"
+            echo "requirements-changed=$requirements_changed"
+            echo "python-version-file=$(in_dir "$version_root" .python-version)"
+            echo "requirements=$requirements"
+            echo "dev-requirements=$dev_requirements"
+          } >> "$GITHUB_OUTPUT"
+          echo "Project: $wd, Python from $(in_dir "$version_root" .python-version)"
+          if [ "$docs_only" = true ]; then
+            echo "::notice::Only documentation changed: lint, typecheck, tests and audit are skipped."
+          fi
+
+  branch-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check promotion source
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          BRANCH_RULES: ${{ inputs.branch-rules }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != pull_request ]; then
+            echo "Not a pull request: no promotion rule applies."
+            exit 0
+          fi
+          if [[ ! "$BRANCH_RULES" =~ ^[A-Za-z0-9._/:,-]*$ ]]; then
+            echo "::error::branch-rules may only hold base:head pairs separated by commas"
+            exit 1
+          fi
+          required_head=""
+          IFS=',' read -r -a rules <<< "$BRANCH_RULES"
+          for rule in "${rules[@]}"; do
+            base="${rule%%:*}"
+            head="${rule#*:}"
+            if [ -z "$base" ] || [ -z "$head" ] || [ "$base" = "$rule" ]; then
+              echo "::error::branch-rules entry '$rule' is not base:head"
+              exit 1
+            fi
+            if [ "$base" = "$BASE_REF" ]; then required_head="$head"; fi
+          done
+          if [ -z "$required_head" ]; then
+            echo "No promotion rule for '$BASE_REF'."
+            exit 0
+          fi
+          if [ "$HEAD_REF" != "$required_head" ]; then
+            echo "::error::A pull request into '$BASE_REF' must come from '$required_head'; this one comes from '$HEAD_REF'. Only an organization owner can merge it, as a hotfix."
+            exit 1
+          fi
+          echo "'$HEAD_REF' into '$BASE_REF' follows the promotion path."
+
+  lint:
+    needs: preflight
+    if: needs.preflight.outputs.docs-only == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: ${{ needs.preflight.outputs.python-version-file }}
+          cache: pip
+          cache-dependency-path: ${{ needs.preflight.outputs.dev-requirements }}
+      - name: Install tooling
+        env:
+          DEV_REQUIREMENTS: ${{ needs.preflight.outputs.dev-requirements }}
+        run: python -m pip install -r "$GITHUB_WORKSPACE/$DEV_REQUIREMENTS"
+      - name: Lint
+        run: python -m ruff check .
+
+  typecheck:
+    needs: preflight
+    if: needs.preflight.outputs.docs-only == 'false' && inputs.mypy
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: ${{ needs.preflight.outputs.python-version-file }}
+          cache: pip
+          cache-dependency-path: |
+            ${{ needs.preflight.outputs.requirements }}
+            ${{ needs.preflight.outputs.dev-requirements }}
+      - name: Install
+        env:
+          REQUIREMENTS: ${{ needs.preflight.outputs.requirements }}
+          DEV_REQUIREMENTS: ${{ needs.preflight.outputs.dev-requirements }}
+        run: python -m pip install -r "$GITHUB_WORKSPACE/$REQUIREMENTS" -r "$GITHUB_WORKSPACE/$DEV_REQUIREMENTS"
+      # Targets and strictness come from the repository's mypy configuration.
+      - name: Typecheck
+        run: python -m mypy
+
+  test:
+    needs: preflight
+    if: needs.preflight.outputs.docs-only == 'false' && inputs.test
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: ${{ needs.preflight.outputs.python-version-file }}
+          cache: pip
+          cache-dependency-path: |
+            ${{ needs.preflight.outputs.requirements }}
+            ${{ needs.preflight.outputs.dev-requirements }}
+      - name: Install
+        env:
+          REQUIREMENTS: ${{ needs.preflight.outputs.requirements }}
+          DEV_REQUIREMENTS: ${{ needs.preflight.outputs.dev-requirements }}
+        run: python -m pip install -r "$GITHUB_WORKSPACE/$REQUIREMENTS" -r "$GITHUB_WORKSPACE/$DEV_REQUIREMENTS"
+      # pytest exits 5 when it collects no tests, which fails this step.
+      - name: Test
+        run: python -m pytest
+
+  # Runs only when the pull request changes a requirements file.
+  audit:
+    needs: preflight
+    if: needs.preflight.outputs.docs-only == 'false' && needs.preflight.outputs.requirements-changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: ${{ needs.preflight.outputs.python-version-file }}
+      - name: Install pip-audit
+        run: python -m pip install pip-audit==2.10.1
+      - name: Audit dependencies
+        env:
+          REQUIREMENTS: ${{ needs.preflight.outputs.requirements }}
+          DEV_REQUIREMENTS: ${{ needs.preflight.outputs.dev-requirements }}
+        run: python -m pip_audit -r "$REQUIREMENTS" -r "$DEV_REQUIREMENTS"
+
+  ci-summary:
+    if: always()
+    needs: [preflight, branch-policy, lint, typecheck, test, audit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      failed-jobs: ${{ steps.summarise.outputs.failed-jobs }}
+    steps:
+      # Each line: job, result, whether the job was switched on. A skip is
+      # accepted only for a job switched off by its input, by a docs-only
+      # change, or (audit) by unchanged requirements.
+      - name: Summarise job results
+        id: summarise
+        env:
+          JOB_STATES: |
+            preflight ${{ needs.preflight.result }} true
+            branch-policy ${{ needs.branch-policy.result }} true
+            lint ${{ needs.lint.result }} ${{ needs.preflight.outputs.docs-only == 'false' }}
+            typecheck ${{ needs.typecheck.result }} ${{ needs.preflight.outputs.docs-only == 'false' && inputs.mypy }}
+            test ${{ needs.test.result }} ${{ needs.preflight.outputs.docs-only == 'false' && inputs.test }}
+            audit ${{ needs.audit.result }} ${{ needs.preflight.outputs.docs-only == 'false' && needs.preflight.outputs.requirements-changed == 'true' }}
+        run: |
+          set -euo pipefail
+          failed=""
+          while read -r job result enabled; do
+            [ -n "$job" ] || continue
+            case "$result" in
+              success)
+                echo "$job: success"
+                ;;
+              skipped)
+                if [ "$enabled" = true ]; then
+                  echo "::error::$job was skipped although it is switched on"
+                  failed="$failed $job"
+                else
+                  echo "$job: skipped by design"
+                fi
+                ;;
+              *)
+                echo "::error::$job finished with '$result'"
+                failed="$failed $job"
+                ;;
+            esac
+          done <<< "$JOB_STATES"
+          failed="${failed# }"
+          echo "failed-jobs=$failed" >> "$GITHUB_OUTPUT"
+          if [ -n "$failed" ]; then
+            echo "::error::CI failed: $failed"
+            exit 1
+          fi
+          echo "Every enabled job passed."

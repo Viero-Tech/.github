@@ -1,0 +1,21 @@
+name: selftest
+
+# CI for this repository. The job is named `ci`, so the check that branch
+# protection requires reads `ci / ci-summary`, as in every other repository.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: selftest-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/selftest-suite.yml
