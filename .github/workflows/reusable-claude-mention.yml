@@ -24,8 +24,11 @@ on:
         type: string
         default: ''
 
+# Read-only: Claude answers questions and reviews on pull requests but never pushes.
+# A called workflow can only lower the caller's grant, so this caps every repo even
+# where the caller still grants contents: write.
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
   issues: write
   id-token: write   # required for OIDC AssumeRoleWithWebIdentity
@@ -33,12 +36,12 @@ permissions:
 
 jobs:
   claude:
-    # Only fire when the triggering event body contains @claude.
+    # Only on pull requests, and only when the body contains @claude. Plain issues are
+    # excluded because the action opens a branch for them, which needs write access.
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,9 +52,13 @@ jobs:
           role-to-assume: ${{ inputs.aws_role_arn }}
           aws-region: ${{ inputs.aws_region }}
           role-session-name: claude-mention-${{ github.run_id }}
-      - uses: anthropics/claude-code-action@v1
+      - uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc # v1
         with:
           use_bedrock: 'true'
+          # The job token instead of the Claude App token: the App can write to every
+          # repository, the job token above cannot.
+          github_token: ${{ github.token }}
           claude_args: |
             --model ${{ inputs.bedrock_model_id }}
+            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files,Bash(git push:*),Bash(git commit:*)"
             ${{ inputs.claude_args_extra }}
