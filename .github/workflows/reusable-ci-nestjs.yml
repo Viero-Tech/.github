@@ -15,8 +15,8 @@ on:
         default: ''
       submodules:
         # Passed verbatim to actions/checkout. Set to 'recursive' for repos
-        # that consume git submodules (e.g. fleet-cards-be has
-        # prisma/idp-views/ as a submodule of Viero-Tech/idp-prisma).
+        # that consume git submodules (e.g. a shared Prisma views
+        # directory vendored from another private repository).
         type: string
         default: 'false'
       prisma-generate:
@@ -44,7 +44,7 @@ on:
         # cannot clone other private repos, so submodule fetches across
         # repos fail with a 404 unless a credential is supplied. Pass the
         # private half of a read-only deploy key registered on the
-        # submodule repo (e.g. Viero-Tech/idp-prisma).
+        # submodule repo.
         #
         # Must be passed as a SECRET, not an input. GitHub rejects
         # `${{ secrets.X }}` in `with:` blocks of reusable workflow calls
@@ -103,9 +103,8 @@ jobs:
       #
       # TRANSITIONAL. Pinning a major in a workflow is the thing standard 09 C8 and
       # standard 11 P1 forbid, and this branch exists only because seven callers pin
-      # no `packageManager` and would otherwise lose CI outright: fleet-cards-fe,
-      # generalized-platform-be, idp-fe, unigaz-driver-be, unigaz-platform-be,
-      # unigaz-platform-fe, viero-site. Once every caller pins the field, delete the
+      # no `packageManager` and would otherwise lose CI outright. Once every
+      # caller pins the field, delete the
       # branch and let this step fail instead of falling back.
       - name: Resolve pnpm version
         id: pnpm
@@ -193,9 +192,8 @@ jobs:
       #
       # TRANSITIONAL. Pinning a major in a workflow is the thing standard 09 C8 and
       # standard 11 P1 forbid, and this branch exists only because seven callers pin
-      # no `packageManager` and would otherwise lose CI outright: fleet-cards-fe,
-      # generalized-platform-be, idp-fe, unigaz-driver-be, unigaz-platform-be,
-      # unigaz-platform-fe, viero-site. Once every caller pins the field, delete the
+      # no `packageManager` and would otherwise lose CI outright. Once every
+      # caller pins the field, delete the
       # branch and let this step fail instead of falling back.
       - name: Resolve pnpm version
         id: pnpm
@@ -278,9 +276,8 @@ jobs:
       #
       # TRANSITIONAL. Pinning a major in a workflow is the thing standard 09 C8 and
       # standard 11 P1 forbid, and this branch exists only because seven callers pin
-      # no `packageManager` and would otherwise lose CI outright: fleet-cards-fe,
-      # generalized-platform-be, idp-fe, unigaz-driver-be, unigaz-platform-be,
-      # unigaz-platform-fe, viero-site. Once every caller pins the field, delete the
+      # no `packageManager` and would otherwise lose CI outright. Once every
+      # caller pins the field, delete the
       # branch and let this step fail instead of falling back.
       - name: Resolve pnpm version
         id: pnpm
@@ -377,9 +374,8 @@ jobs:
       #
       # TRANSITIONAL. Pinning a major in a workflow is the thing standard 09 C8 and
       # standard 11 P1 forbid, and this branch exists only because seven callers pin
-      # no `packageManager` and would otherwise lose CI outright: fleet-cards-fe,
-      # generalized-platform-be, idp-fe, unigaz-driver-be, unigaz-platform-be,
-      # unigaz-platform-fe, viero-site. Once every caller pins the field, delete the
+      # no `packageManager` and would otherwise lose CI outright. Once every
+      # caller pins the field, delete the
       # branch and let this step fail instead of falling back.
       - name: Resolve pnpm version
         id: pnpm
@@ -498,9 +494,8 @@ jobs:
       #
       # TRANSITIONAL. Pinning a major in a workflow is the thing standard 09 C8 and
       # standard 11 P1 forbid, and this branch exists only because seven callers pin
-      # no `packageManager` and would otherwise lose CI outright: fleet-cards-fe,
-      # generalized-platform-be, idp-fe, unigaz-driver-be, unigaz-platform-be,
-      # unigaz-platform-fe, viero-site. Once every caller pins the field, delete the
+      # no `packageManager` and would otherwise lose CI outright. Once every
+      # caller pins the field, delete the
       # branch and let this step fail instead of falling back.
       - name: Resolve pnpm version
         id: pnpm

@@ -44,9 +44,8 @@ jobs:
       #
       # TRANSITIONAL. Pinning a major in a workflow is the thing standard 09 C8 and
       # standard 11 P1 forbid, and this branch exists only because seven callers pin
-      # no `packageManager` and would otherwise lose CI outright: fleet-cards-fe,
-      # generalized-platform-be, idp-fe, unigaz-driver-be, unigaz-platform-be,
-      # unigaz-platform-fe, viero-site. Once every caller pins the field, delete the
+      # no `packageManager` and would otherwise lose CI outright. Once every
+      # caller pins the field, delete the
       # branch and let this step fail instead of falling back.
       - name: Resolve pnpm version
         id: pnpm
@@ -107,9 +106,8 @@ jobs:
       #
       # TRANSITIONAL. Pinning a major in a workflow is the thing standard 09 C8 and
       # standard 11 P1 forbid, and this branch exists only because seven callers pin
-      # no `packageManager` and would otherwise lose CI outright: fleet-cards-fe,
-      # generalized-platform-be, idp-fe, unigaz-driver-be, unigaz-platform-be,
-      # unigaz-platform-fe, viero-site. Once every caller pins the field, delete the
+      # no `packageManager` and would otherwise lose CI outright. Once every
+      # caller pins the field, delete the
       # branch and let this step fail instead of falling back.
       - name: Resolve pnpm version
         id: pnpm
