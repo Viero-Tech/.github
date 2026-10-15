@@ -18,5 +18,11 @@ function reach(name, rawUrl) {
   });
 }
 
+// The caller's `env` input reaches every job that runs this script.
+if (process.env.SELFTEST_ENV !== 'present' || process.env.SELFTEST_EMPTY !== '') {
+  console.error('the env input did not reach this job');
+  process.exit(1);
+}
+
 await reach('database', process.env.DATABASE_URL);
 await reach('redis', process.env.REDIS_URL);

@@ -68,7 +68,7 @@ In a pnpm workspace, point `working-directory` at the package. Install runs wher
 | `build` | `pnpm run build` | same, with `build-env` | | | |
 | `test` | `test:ci` script, else `test` | same | migrations applied to an empty database, then compared with the schema | `pytest` | `flutter test` |
 | `e2e` | opt-in script, services available | opt-in script | | | |
-| `contract` | opt-in script | opt-in script | | | |
+| `contract` | opt-in script, services available | opt-in script | | | |
 | `audit` | `pnpm audit --audit-level=high` when the PR changes the lockfile | same | same | `pip-audit` when the PR changes a requirements file | |
 | `ci-summary` | the required check | same | same | same | same |
 
@@ -102,19 +102,20 @@ On a pull request, `branch-policy` fails when the head branch is not the promoti
 | `contract` | boolean | `false` | Run the contract job |
 | `contract-script` | string | `contract` | Script the contract job runs |
 | `lint-max-warnings` | string | `0` | ESLint warning budget |
-| `database` | string | `none` | `none`, `postgres` (16) or `postgis` (16 + 3.5) service for test and e2e |
+| `database` | string | `none` | `none`, `postgres` (16) or `postgis` (16 + 3.5) service for test, e2e and contract |
 | `database-image` | string | | Replaces the default database image |
 | `database-port` | string | `5432` | Host port of the database service |
 | `database-name` | string | `ci` | Database created in the service |
 | `database-password` | string | `postgres` | Password of the `postgres` user, CI only |
-| `redis` | boolean | `false` | Redis service for test and e2e |
-| `migrate-script` | string | | Script run before test and e2e |
-| `node-options` | string | | `NODE_OPTIONS` for test and e2e |
+| `redis` | boolean | `false` | Redis service for test, e2e and contract |
+| `migrate-script` | string | | Script run before test, e2e and contract |
+| `node-options` | string | | `NODE_OPTIONS` for test, e2e and contract |
+| `env` | string | | Non-secret `KEY=value` lines exported to build, test, e2e and contract. CI-only values; the workflow refuses names it sets itself (`DATABASE_URL`, `REDIS_URL`, `NODE_OPTIONS`, `NODE_AUTH_TOKEN`, `CI`, `PATH`, `GITHUB_*`, `RUNNER_*`, `ACTIONS_*`) |
 | `branch-rules` | string | `staging:dev,prod:staging` | Promotion sources |
 | `timeout-minutes` | number | `15` | Timeout of each job except e2e |
 | `e2e-timeout-minutes` | number | `30` | Timeout of the e2e job |
 
-With a database, test and e2e see `DATABASE_URL=postgresql://postgres:<password>@localhost:<port>/<name>`. With Redis, they see `REDIS_URL=redis://localhost:6379`.
+With a database, test, e2e and contract see `DATABASE_URL=postgresql://postgres:<password>@localhost:<port>/<name>`. With Redis, they see `REDIS_URL=redis://localhost:6379`.
 
 ### ci-nextjs.yml
 
