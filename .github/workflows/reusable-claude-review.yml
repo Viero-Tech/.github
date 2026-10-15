@@ -53,7 +53,7 @@ jobs:
           fetch-depth: 1
       # OIDC: assume the IAM role that has bedrock:InvokeModel.
       # Trust policy on the role pins repo:Viero-Tech/* and the standard sts.amazonaws.com audience.
-      - uses: aws-actions/configure-aws-credentials@d979d5b3a71173a29b74b5b88418bfda9437d885 # v6.1.1
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ inputs.aws_role_arn }}
           aws-region: ${{ inputs.aws_region }}
