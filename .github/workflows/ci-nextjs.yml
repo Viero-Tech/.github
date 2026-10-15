@@ -113,6 +113,7 @@ jobs:
           E2E_SCRIPT: ${{ inputs.e2e-script }}
           CONTRACT_SCRIPT: ${{ inputs.contract-script }}
           BUILD_ENV: ${{ inputs.build-env }}
+          CALLER_ENV: ''
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -178,6 +179,15 @@ jobs:
             [ -z "$line" ] && continue
             [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]] || fail "build-env line '$line' is not KEY=value"
           done <<< "$BUILD_ENV"
+          # The workflow owns these names; a caller value would break install or the services.
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]] || fail "env line '$line' is not KEY=value"
+            case "${line%%=*}" in
+              GITHUB_*|RUNNER_*|ACTIONS_*|CI|NODE_AUTH_TOKEN|NODE_OPTIONS|DATABASE_URL|REDIS_URL|PATH)
+                fail "env may not set ${line%%=*}: the workflow sets it" ;;
+            esac
+          done <<< "$CALLER_ENV"
 
           lockfile=$(in_dir "$install_root" pnpm-lock.yaml)
           docs_only=false

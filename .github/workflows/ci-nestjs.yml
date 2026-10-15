@@ -47,7 +47,7 @@ on:
         type: string
         default: '0'
       database:
-        description: Database service for the test and e2e jobs. One of none, postgres, postgis.
+        description: Database service for the test, e2e and contract jobs. One of none, postgres, postgis.
         type: string
         default: 'none'
       database-image:
@@ -67,15 +67,19 @@ on:
         type: string
         default: 'postgres'
       redis:
-        description: Start a Redis service for the test and e2e jobs and export REDIS_URL.
+        description: Start a Redis service for the test, e2e and contract jobs and export REDIS_URL.
         type: boolean
         default: false
       migrate-script:
-        description: package.json script run before the test and e2e jobs, with DATABASE_URL and REDIS_URL set.
+        description: package.json script run before the test, e2e and contract jobs, with DATABASE_URL and REDIS_URL set.
         type: string
         default: ''
       node-options:
-        description: NODE_OPTIONS for the test and e2e jobs, for example --max-old-space-size=6144.
+        description: NODE_OPTIONS for the test, e2e and contract jobs, for example --max-old-space-size=6144.
+        type: string
+        default: ''
+      env:
+        description: Non-secret KEY=value lines exported to the build, test, e2e and contract jobs, one per line. CI-only values, never a real credential.
         type: string
         default: ''
       branch-rules:
@@ -136,6 +140,7 @@ jobs:
           E2E_SCRIPT: ${{ inputs.e2e-script }}
           CONTRACT_SCRIPT: ${{ inputs.contract-script }}
           BUILD_ENV: ''
+          CALLER_ENV: ${{ inputs.env }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -201,6 +206,15 @@ jobs:
             [ -z "$line" ] && continue
             [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]] || fail "build-env line '$line' is not KEY=value"
           done <<< "$BUILD_ENV"
+          # The workflow owns these names; a caller value would break install or the services.
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]] || fail "env line '$line' is not KEY=value"
+            case "${line%%=*}" in
+              GITHUB_*|RUNNER_*|ACTIONS_*|CI|NODE_AUTH_TOKEN|NODE_OPTIONS|DATABASE_URL|REDIS_URL|PATH)
+                fail "env may not set ${line%%=*}: the workflow sets it" ;;
+            esac
+          done <<< "$CALLER_ENV"
 
           lockfile=$(in_dir "$install_root" pnpm-lock.yaml)
           docs_only=false
@@ -372,6 +386,14 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm install --frozen-lockfile
+      - name: Export caller environment
+        env:
+          CALLER_ENV: ${{ inputs.env }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then printf '%s\n' "$line" >> "$GITHUB_ENV"; fi
+          done <<< "$CALLER_ENV"
       - name: Generate Prisma client
         if: inputs.prisma
         run: DATABASE_URL="${DATABASE_URL:-postgresql://placeholder:placeholder@localhost:5432/placeholder}" pnpm exec prisma generate
@@ -430,6 +452,14 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm install --frozen-lockfile
+      - name: Export caller environment
+        env:
+          CALLER_ENV: ${{ inputs.env }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then printf '%s\n' "$line" >> "$GITHUB_ENV"; fi
+          done <<< "$CALLER_ENV"
       - name: Export service URLs
         env:
           DATABASE: ${{ inputs.database }}
@@ -515,6 +545,14 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm install --frozen-lockfile
+      - name: Export caller environment
+        env:
+          CALLER_ENV: ${{ inputs.env }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then printf '%s\n' "$line" >> "$GITHUB_ENV"; fi
+          done <<< "$CALLER_ENV"
       - name: Export service URLs
         env:
           DATABASE: ${{ inputs.database }}
@@ -551,6 +589,31 @@ jobs:
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
+    # An empty image means the service is not started (database: none, redis: false).
+    services:
+      database:
+        image: ${{ needs.preflight.outputs.database-image }}
+        env:
+          POSTGRES_PASSWORD: ${{ inputs.database-password }}
+          POSTGRES_DB: ${{ inputs.database-name }}
+        ports:
+          - ${{ inputs.database-port }}:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: ${{ needs.preflight.outputs.redis-image }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      NODE_OPTIONS: ${{ inputs.node-options }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -570,9 +633,37 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm install --frozen-lockfile
+      - name: Export caller environment
+        env:
+          CALLER_ENV: ${{ inputs.env }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then printf '%s\n' "$line" >> "$GITHUB_ENV"; fi
+          done <<< "$CALLER_ENV"
+      - name: Export service URLs
+        env:
+          DATABASE: ${{ inputs.database }}
+          DATABASE_PORT: ${{ inputs.database-port }}
+          DATABASE_NAME: ${{ inputs.database-name }}
+          DATABASE_PASSWORD: ${{ inputs.database-password }}
+          REDIS: ${{ inputs.redis }}
+        run: |
+          set -euo pipefail
+          if [ "$DATABASE" != none ]; then
+            echo "DATABASE_URL=postgresql://postgres:${DATABASE_PASSWORD}@localhost:${DATABASE_PORT}/${DATABASE_NAME}" >> "$GITHUB_ENV"
+          fi
+          if [ "$REDIS" = true ]; then
+            echo "REDIS_URL=redis://localhost:6379" >> "$GITHUB_ENV"
+          fi
       - name: Generate Prisma client
         if: inputs.prisma
         run: DATABASE_URL="${DATABASE_URL:-postgresql://placeholder:placeholder@localhost:5432/placeholder}" pnpm exec prisma generate
+      - name: Migrate
+        if: inputs.migrate-script != ''
+        env:
+          MIGRATE_SCRIPT: ${{ inputs.migrate-script }}
+        run: pnpm run "$MIGRATE_SCRIPT"
       - name: Contract
         env:
           CONTRACT_SCRIPT: ${{ inputs.contract-script }}

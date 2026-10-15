@@ -158,7 +158,7 @@ def node_env(workflow, overrides):
         "EVENT_NAME": "pull_request", "WORKING_DIRECTORY": "apps/api", "LINT_MAX_WARNINGS": "0",
         "DATABASE": "postgres" if workflow == "ci-prisma.yml" else "none", "DATABASE_IMAGE": "",
         "DATABASE_PORT": "5432", "DATABASE_NAME": "ci", "DATABASE_PASSWORD": "postgres", "REDIS": "false",
-        "MIGRATE_SCRIPT": "", "E2E_SCRIPT": "test:e2e", "CONTRACT_SCRIPT": "contract", "BUILD_ENV": "",
+        "MIGRATE_SCRIPT": "", "E2E_SCRIPT": "test:e2e", "CONTRACT_SCRIPT": "contract", "BUILD_ENV": "", "CALLER_ENV": "",
     }
     for key, value in defaults.items():
         env.setdefault(key, value)
@@ -223,6 +223,10 @@ def test_node_preflight(workflow):
         ("privileged database port", {"DATABASE_PORT": "80"}),
         ("script name with shell characters", {"E2E_SCRIPT": "e2e; id"}),
         ("malformed build-env line", {"BUILD_ENV": "NOT A PAIR"}),
+        ("malformed env line", {"CALLER_ENV": "NOT A PAIR"}),
+        ("env setting DATABASE_URL", {"CALLER_ENV": "DATABASE_URL=postgresql://x"}),
+        ("env setting a GITHUB_ name", {"CALLER_ENV": "GITHUB_TOKEN=x"}),
+        ("env setting NODE_OPTIONS", {"CALLER_ENV": "A=1\nNODE_OPTIONS=--x"}),
     ]:
         code, _, _ = run(NODE_WORKSPACE, {"apps/api/src/main.ts": "x"}, overrides)
         check(code == 1, f"{title} fails")
@@ -239,6 +243,9 @@ def test_node_preflight(workflow):
         check(out.get("database-image") == "postgres:17-alpine", "database-image overrides the default")
         code, _, out = run(NODE_WORKSPACE, {"apps/api/src/main.ts": "x"}, {})
         check(out.get("database-image") == "" and out.get("redis-image") == "", "database none starts no service")
+    code, _, _ = run(NODE_WORKSPACE, {"apps/api/src/main.ts": "x"},
+                     {"CALLER_ENV": "SIGNING_KEY=1111\nEMPTY=\nURL=http://localhost:4100/a=b"})
+    check(code == 0, "valid env lines pass, empty values and '=' inside values included")
 
 
 PYTHON_PROJECT = {
