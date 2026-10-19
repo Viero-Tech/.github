@@ -62,7 +62,7 @@ jobs:
           role-to-assume: ${{ inputs.aws_role_arn }}
           aws-region: ${{ inputs.aws_region }}
           role-session-name: claude-review-${{ github.run_id }}
-      - uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc # v1
+      - uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1
         with:
           use_bedrock: 'true'
           use_sticky_comment: ${{ inputs.use_sticky_comment }}
