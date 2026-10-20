@@ -49,7 +49,9 @@ concurrency:
 
 jobs:
   review:
-    if: ${{ !inputs.skip_drafts || github.event.pull_request.draft == false }}
+    # Dependabot PRs are skipped: claude-code-action refuses bot actors, and
+    # Dependabot runs only receive Dependabot secrets. CI gates those PRs.
+    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && (!inputs.skip_drafts || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
