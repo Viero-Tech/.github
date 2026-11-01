@@ -314,6 +314,32 @@ def test_shared_scripts_identical():
     check(len(set(scripts.values())) == 1, "the Node preflight is the same in ci-nestjs, ci-nextjs and ci-prisma")
 
 
+def test_build_workflow():
+    """build.yml is the signing identity the AWS push roles and image-verify trust (plan v4.18, 3.8): it
+    must build exactly the pushed commit, on push only, and take no input that could choose another."""
+    data = yaml.safe_load((WORKFLOWS / "build.yml").read_text())
+    trigger = data.get("on", data.get(True))
+    inputs = trigger["workflow_call"].get("inputs", {})
+    banned = [name for name in inputs if any(word in name.lower() for word in ("ref", "sha", "checkout", "commit"))]
+    check(not banned, f"build.yml declares no ref, sha, checkout or commit input (found {banned})")
+    checkout = [s for s in data["jobs"]["build"]["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
+    check(len(checkout) == 1, "build.yml checks out once")
+    if checkout:
+        settings = checkout[0].get("with", {})
+        check(settings.get("ref") == "${{ github.sha }}", "build.yml checks out github.sha")
+        check(settings.get("persist-credentials") is False, "build.yml checks out with persist-credentials: false")
+
+    script, _ = step_script("build.yml", "build", "Check the trigger")
+    with tempfile.TemporaryDirectory() as tmp:
+        def run(event, ref, image="idp-be"):
+            return run_script(script, {"EVENT_NAME": event, "GIT_REF": ref, "IMAGE": image}, tmp)[0]
+        check(run("push", "refs/heads/staging") == 0, "build.yml runs on a push to a branch")
+        check(run("workflow_dispatch", "refs/heads/staging") != 0, "build.yml refuses workflow_dispatch")
+        check(run("pull_request", "refs/pull/1/merge") != 0, "build.yml refuses pull_request")
+        check(run("push", "refs/tags/v1") != 0, "build.yml refuses a tag push")
+        check(run("push", "refs/heads/staging", "Bad_Name") != 0, "build.yml refuses an image name that is not a DNS label")
+
+
 def main():
     for workflow in ALL_STACKS:
         test_summary(workflow)
@@ -323,6 +349,7 @@ def main():
     test_python_preflight()
     test_flutter_preflight()
     test_shared_scripts_identical()
+    test_build_workflow()
     if failures:
         print(f"\n{len(failures)} check(s) failed")
         return 1

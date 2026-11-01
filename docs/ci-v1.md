@@ -189,6 +189,49 @@ jobs:
 
 A pull request whose head is not the promotion source of its base is closed with a comment, unless its author is an organization owner. `GITHUB_TOKEN` cannot read organization membership, so pass `membership-token` or `owner-logins`; with neither, the job fails and closes nothing. An `edited` event is acted on only when the base branch changed.
 
+### build.yml
+
+Builds a service image once for `linux/amd64` and pushes the same digest to Artifact Registry and to ECR, then signs each digest with Cosign (keyless) and attests an SPDX SBOM. A service with a migration stage gets its migration image built and pushed first.
+
+```yaml
+name: build
+on:
+  push:
+    branches: [staging, prod]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  build:
+    uses: Viero-Tech/.github/.github/workflows/build.yml@v1
+    with:
+      image: idp-be
+      target: production
+      migrate-target: migrator
+```
+
+| Input | Default | Purpose |
+|---|---|---|
+| `image` | required | Service name from `products.yaml`; the image is `viero/<image>` in both registries |
+| `target` | | Dockerfile stage of the app image; empty builds the last stage |
+| `migrate-target` | | Dockerfile stage of the migration image; empty builds none |
+| `ar-migrate-image` | `<image>-migrator` | Artifact Registry name of the migration image (ECR uses `viero/<image>-migrate`) |
+| `dockerfile` | `Dockerfile` | Path of the Dockerfile |
+
+Outputs: `app-digest`, `migrate-digest`.
+
+| Registry | Tags |
+|---|---|
+| Artifact Registry | `<branch>-<UTC yyyymmddHHMMSS>-<short sha>` and `<branch>-<short sha>`, as before |
+| ECR | `<branch>-<UTC yyyymmddHHMMSS>-<short sha>` only (ECR tags are immutable) |
+
+Rules the workflow enforces:
+
+- It runs on `push` to a branch only. `workflow_dispatch`, pull requests and tag pushes fail, so a rebuild is a new commit.
+- It builds the pushed commit (`github.sha`) and has no ref, sha or checkout input; the selftest fails if one is added.
+- The ECR push role `viero-staging/ecr-push-<repo>` trusts only the repository's deploy branches from `products.yaml` and only this workflow at a `v1` tag. A caller on another branch, or a call to `@main`, fails at the AWS login step.
+- Image signatures name this workflow at its `v1` tag, the calling repository, its branch and the `push` trigger; the AWS staging image checks accept nothing else.
+
 ## Releases
 
 1. Every change arrives by pull request. The `selftest` workflow runs actionlint, unit tests for the shell logic, and each shared workflow against the fixtures in `.github/fixtures` (pass, fail-lint, fail-type, fail-test, and a run with jobs switched off). Its check is `ci / ci-summary`.
