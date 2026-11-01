@@ -1,0 +1,285 @@
+name: Build and push
+
+# The one build for every service that deploys to AWS staging (plan v4.18, 3.8). Builds once for amd64 and
+# pushes the same digest to Artifact Registry (tags exactly as before, so GCP image automation keeps
+# selecting them) and to ECR. Signs every digest keylessly with Cosign and attests an SPDX SBOM.
+#
+# Trust rests on this file: the AWS push role of each repo (viero-staging/ecr-push-<repo>) only trusts this
+# workflow at a v1 tag, and the AWS bump and image-verify only accept signatures whose identity is this
+# workflow, the product repo, its deploy branch and a push trigger. Therefore:
+#   - it runs only on `push` to a branch, and builds exactly the pushed commit (github.sha);
+#   - it takes NO ref, sha or checkout input (the selftest fails if one is added);
+#   - a rebuild is a new commit on the branch.
+#
+# Caller (in the product repo):
+#   on:
+#     push:
+#       branches: [staging, prod]
+#   permissions:
+#     contents: read
+#     id-token: write
+#   jobs:
+#     build:
+#       uses: Viero-Tech/.github/.github/workflows/build.yml@v1
+#       with:
+#         image: idp-be
+#         target: production
+#         migrate-target: migrator
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        # Service name from products.yaml: the image is viero/<image> in both registries.
+        type: string
+        required: true
+      target:
+        # Dockerfile stage of the app image. Empty builds the last stage.
+        type: string
+        default: ''
+      migrate-target:
+        # Dockerfile stage of the migration image. When set, that image is built and pushed BEFORE the
+        # app image: Artifact Registry viero/<ar-migrate-image>, ECR viero/<image>-migrate.
+        type: string
+        default: ''
+      ar-migrate-image:
+        # Artifact Registry name of the migration image. Defaults to <image>-migrator (the name the
+        # dev kit pulls).
+        type: string
+        default: ''
+      dockerfile:
+        type: string
+        default: Dockerfile
+    outputs:
+      app-digest:
+        value: ${{ jobs.build.outputs.app-digest }}
+      migrate-digest:
+        value: ${{ jobs.build.outputs.migrate-digest }}
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AR_REGISTRY: europe-west1-docker.pkg.dev
+  AR_PATH: europe-west1-docker.pkg.dev/viero-platform/viero
+  GCP_WIF_PROVIDER: projects/1069486846267/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+  GCP_SERVICE_ACCOUNT: github-ci@viero-platform.iam.gserviceaccount.com
+  AWS_ACCOUNT: '514180701907'
+  AWS_REGION: eu-west-1
+  ECR_REGISTRY: 514180701907.dkr.ecr.eu-west-1.amazonaws.com
+  COSIGN_VERSION: v3.1.4
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      app-digest: ${{ steps.app.outputs.digest }}
+      migrate-digest: ${{ steps.migrate.outputs.digest }}
+    steps:
+      - name: Check the trigger
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GIT_REF: ${{ github.ref }}
+          IMAGE: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          [ "$EVENT_NAME" = push ] || { echo "::error::build.yml runs on push only (got $EVENT_NAME); a rebuild is a new commit"; exit 1; }
+          case "$GIT_REF" in
+            refs/heads/*) ;;
+            *) echo "::error::build.yml builds branches only (got $GIT_REF)"; exit 1 ;;
+          esac
+          [[ "$IMAGE" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || { echo "::error::image '$IMAGE' is not a lowercase DNS label"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Compute image names and tags
+        id: names
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          IMAGE: ${{ inputs.image }}
+          AR_MIGRATE_IMAGE: ${{ inputs.ar-migrate-image }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse --short HEAD)
+          # Artifact Registry tags stay as before: <branch>-<UTC yyyymmddHHMMSS>-<sha> (sorted by GCP image
+          # automation) and <branch>-<sha>. ECR tags are immutable, so it gets only the first, which is
+          # unique per run.
+          version="$REF_NAME-$(date -u +%Y%m%d%H%M%S)-$sha"
+          {
+            echo "version=$version"
+            echo "branch-sha=$REF_NAME-$sha"
+            echo "ar-app=$AR_PATH/$IMAGE"
+            echo "ar-migrate=$AR_PATH/${AR_MIGRATE_IMAGE:-$IMAGE-migrator}"
+            echo "ecr-app=$ECR_REGISTRY/viero/$IMAGE"
+            echo "ecr-migrate=$ECR_REGISTRY/viero/$IMAGE-migrate"
+            echo "push-role=arn:aws:iam::$AWS_ACCOUNT:role/viero-staging/ecr-push-${REPOSITORY#*/}"
+          } >> "$GITHUB_OUTPUT"
+
+      - id: gcp
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Log in to Artifact Registry
+        env:
+          ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin "https://$AR_REGISTRY"
+
+      # The role trusts only this repo's deploy branches and this workflow at a v1 tag: anything else fails here.
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ steps.names.outputs.push-role }}
+          role-session-name: build-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        run: |
+          set -euo pipefail
+          aws ecr get-login-password --region "$AWS_REGION" | docker login -u AWS --password-stdin "$ECR_REGISTRY"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # One build, one export: buildx pushes the identical manifest to every tag, so both registries hold the
+      # same digest. Single-platform manifest, no BuildKit provenance or SBOM (Cosign signs and attests below).
+      - name: Build and push the migration image
+        id: migrate
+        if: inputs.migrate-target != ''
+        env:
+          TARGET: ${{ inputs.migrate-target }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          AR_IMAGE: ${{ steps.names.outputs.ar-migrate }}
+          ECR_IMAGE: ${{ steps.names.outputs.ecr-migrate }}
+          VERSION: ${{ steps.names.outputs.version }}
+          BRANCH_SHA: ${{ steps.names.outputs.branch-sha }}
+        run: |
+          set -euo pipefail
+          meta="$RUNNER_TEMP/migrate-metadata.json"
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+            --file "$DOCKERFILE" --target "$TARGET" --metadata-file "$meta" \
+            --tag "$AR_IMAGE:$VERSION" --tag "$AR_IMAGE:$BRANCH_SHA" --tag "$ECR_IMAGE:$VERSION" \
+            --push .
+          digest=$(jq -er '."containerimage.digest"' "$meta")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push the app image
+        id: app
+        env:
+          TARGET: ${{ inputs.target }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          AR_IMAGE: ${{ steps.names.outputs.ar-app }}
+          ECR_IMAGE: ${{ steps.names.outputs.ecr-app }}
+          VERSION: ${{ steps.names.outputs.version }}
+          BRANCH_SHA: ${{ steps.names.outputs.branch-sha }}
+        run: |
+          set -euo pipefail
+          meta="$RUNNER_TEMP/app-metadata.json"
+          target_args=()
+          if [ -n "$TARGET" ]; then target_args=(--target "$TARGET"); fi
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+            --file "$DOCKERFILE" "${target_args[@]}" --metadata-file "$meta" \
+            --tag "$AR_IMAGE:$VERSION" --tag "$AR_IMAGE:$BRANCH_SHA" --tag "$ECR_IMAGE:$VERSION" \
+            --push .
+          digest=$(jq -er '."containerimage.digest"' "$meta")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: List the pushed digests
+        id: refs
+        env:
+          APP_DIGEST: ${{ steps.app.outputs.digest }}
+          MIGRATE_DIGEST: ${{ steps.migrate.outputs.digest }}
+          AR_APP: ${{ steps.names.outputs.ar-app }}
+          ECR_APP: ${{ steps.names.outputs.ecr-app }}
+          AR_MIGRATE: ${{ steps.names.outputs.ar-migrate }}
+          ECR_MIGRATE: ${{ steps.names.outputs.ecr-migrate }}
+        run: |
+          set -euo pipefail
+          refs="$RUNNER_TEMP/image-refs.txt"
+          : > "$refs"
+          if [ -n "$MIGRATE_DIGEST" ]; then
+            printf '%s\n' "$AR_MIGRATE@$MIGRATE_DIGEST" "$ECR_MIGRATE@$MIGRATE_DIGEST" >> "$refs"
+          fi
+          printf '%s\n' "$AR_APP@$APP_DIGEST" "$ECR_APP@$APP_DIGEST" >> "$refs"
+          # Both registries must serve the digest buildx reported.
+          while IFS= read -r ref; do
+            docker buildx imagetools inspect --raw "$ref" >/dev/null \
+              || { echo "::error::$ref is not in its registry"; exit 1; }
+          done < "$refs"
+          echo "file=$refs" >> "$GITHUB_OUTPUT"
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      # Keyless: the certificate carries this workflow, the caller repo, its ref, the trigger and the run.
+      - name: Sign every digest
+        env:
+          REFS_FILE: ${{ steps.refs.outputs.file }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r ref; do
+            cosign sign --yes "$ref"
+          done < "$REFS_FILE"
+
+      - name: Generate the app SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ steps.names.outputs.ecr-app }}@${{ steps.app.outputs.digest }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/app.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate the migration SBOM
+        if: inputs.migrate-target != ''
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ steps.names.outputs.ecr-migrate }}@${{ steps.migrate.outputs.digest }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/migrate.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest the SBOMs
+        env:
+          APP_DIGEST: ${{ steps.app.outputs.digest }}
+          MIGRATE_DIGEST: ${{ steps.migrate.outputs.digest }}
+          AR_APP: ${{ steps.names.outputs.ar-app }}
+          ECR_APP: ${{ steps.names.outputs.ecr-app }}
+          AR_MIGRATE: ${{ steps.names.outputs.ar-migrate }}
+          ECR_MIGRATE: ${{ steps.names.outputs.ecr-migrate }}
+        run: |
+          set -euo pipefail
+          for ref in "$AR_APP@$APP_DIGEST" "$ECR_APP@$APP_DIGEST"; do
+            cosign attest --yes --type spdxjson --predicate "$RUNNER_TEMP/app.spdx.json" "$ref"
+          done
+          if [ -n "$MIGRATE_DIGEST" ]; then
+            for ref in "$AR_MIGRATE@$MIGRATE_DIGEST" "$ECR_MIGRATE@$MIGRATE_DIGEST"; do
+              cosign attest --yes --type spdxjson --predicate "$RUNNER_TEMP/migrate.spdx.json" "$ref"
+            done
+          fi
+
+      - name: Summary
+        env:
+          REFS_FILE: ${{ steps.refs.outputs.file }}
+          VERSION: ${{ steps.names.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Images ($VERSION), signed and attested"
+            echo '```'
+            cat "$REFS_FILE"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
