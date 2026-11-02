@@ -163,6 +163,20 @@ Prisma 6 and Prisma 7 are supported. On Prisma 7, `migrate deploy` and the drift
 | `branch-rules` | string | `staging:dev,prod:staging` | Promotion sources |
 | `timeout-minutes` | number | `15` | Timeout of each job |
 
+| Secret | Required | Purpose |
+|---|---|---|
+| `git-ssh-key` | no | Private SSH key for the private git dependencies in `pubspec.yaml` (`url: git@github.com:<owner>/<repo>.git`), such as a read-only deploy key on the dependency repository. Lint and test load it before `flutter pub get`; without it every git dependency must be public. Actions secrets do not reach Dependabot pull requests: store the same name as a Dependabot secret too |
+
+```yaml
+jobs:
+  ci:
+    uses: Viero-Tech/.github/.github/workflows/ci-flutter.yml@v1
+    with:
+      flutter-version: '3.44.8'
+    secrets:
+      git-ssh-key: ${{ secrets.GIT_DEPENDENCY_DEPLOY_KEY }}
+```
+
 ### pr-policy.yml
 
 ```yaml
