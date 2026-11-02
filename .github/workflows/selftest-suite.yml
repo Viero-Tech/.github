@@ -254,11 +254,20 @@ jobs:
       working-directory: .github/fixtures/flutter/fail-test
       flutter-version: '3.47.7'
 
+  flutter-setup:
+    needs: changes
+    if: needs.changes.outputs.docs-only == 'false'
+    uses: ./.github/workflows/ci-flutter.yml
+    with:
+      working-directory: .github/fixtures/flutter/setup
+      flutter-version: '3.47.7'
+      setup-script: scripts/ci_setup.sh
+
   # Each fixture line: caller job, its result, the job that must fail ('-'
   # for a pass fixture), and the failed jobs the shared workflow reported.
   ci-summary:
     if: always()
-    needs: [actionlint, script-tests, changes, nestjs-pass, nestjs-switched-off, nestjs-fail-lint, nestjs-fail-type, nestjs-fail-test, nextjs-pass, nextjs-fail-lint, nextjs-fail-type, nextjs-fail-test, prisma-pass, prisma-fail-lint, prisma-fail-type, prisma-fail-test, python-pass, python-fail-lint, python-fail-type, python-fail-test, flutter-pass, flutter-fail-lint, flutter-fail-type, flutter-fail-test]
+    needs: [actionlint, script-tests, changes, nestjs-pass, nestjs-switched-off, nestjs-fail-lint, nestjs-fail-type, nestjs-fail-test, nextjs-pass, nextjs-fail-lint, nextjs-fail-type, nextjs-fail-test, prisma-pass, prisma-fail-lint, prisma-fail-type, prisma-fail-test, python-pass, python-fail-lint, python-fail-type, python-fail-test, flutter-pass, flutter-fail-lint, flutter-fail-type, flutter-fail-test, flutter-setup]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -288,6 +297,7 @@ jobs:
             python-fail-type ${{ needs.python-fail-type.result }} typecheck ${{ needs.python-fail-type.outputs.failed-jobs }}
             python-fail-test ${{ needs.python-fail-test.result }} test ${{ needs.python-fail-test.outputs.failed-jobs }}
             flutter-pass ${{ needs.flutter-pass.result }} - ${{ needs.flutter-pass.outputs.failed-jobs }}
+            flutter-setup ${{ needs.flutter-setup.result }} - ${{ needs.flutter-setup.outputs.failed-jobs }}
             flutter-fail-lint ${{ needs.flutter-fail-lint.result }} lint ${{ needs.flutter-fail-lint.outputs.failed-jobs }}
             flutter-fail-type ${{ needs.flutter-fail-type.result }} lint ${{ needs.flutter-fail-type.outputs.failed-jobs }}
             flutter-fail-test ${{ needs.flutter-fail-test.result }} test ${{ needs.flutter-fail-test.outputs.failed-jobs }}
