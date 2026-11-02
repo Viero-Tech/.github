@@ -303,6 +303,19 @@ def test_flutter_preflight():
     check(code == 1, "a version range is rejected")
     code, _, _ = run({"app/lib/a.dart": "x"}, {"WORKING_DIRECTORY": "."})
     check(code == 1, "a directory without pubspec.yaml fails")
+    code, log, _ = run({"app/lib/a.dart": "x"}, {"SETUP_SCRIPT": "scripts/ci_setup.sh"})
+    check(code == 1 and "does not exist" in log, "a missing setup-script fails")
+    code, log, _ = run({"app/lib/a.dart": "x"}, {"SETUP_SCRIPT": "../a/lib/a.dart"})
+    check(code == 1 and "inside working-directory" in log, "a setup-script outside working-directory fails")
+    code, _, out = run({"app/lib/a.dart": "x"}, {"API_SPEC_REPOSITORY": "Viero-Tech/api", "BASE_REF": "staging"})
+    check(code == 0 and out.get("api-spec-ref") == "staging", "the api-spec ref defaults to the base branch")
+    code, _, out = run({"app/lib/a.dart": "x"}, {"API_SPEC_REPOSITORY": "Viero-Tech/api", "BASE_REF": "dev",
+                                                 "API_SPEC_REF": "v1.2.0"})
+    check(code == 0 and out.get("api-spec-ref") == "v1.2.0", "an explicit api-spec-ref wins over the base branch")
+    code, log, _ = run({"app/lib/a.dart": "x"}, {"API_SPEC_REPOSITORY": "api; rm -rf /", "BASE_REF": "dev"})
+    check(code == 1 and "owner/name" in log, "an api-spec-repository that is not owner/name fails")
+    code, _, out = run({"app/lib/a.dart": "x"}, {})
+    check(out.get("api-spec-ref") == "", "no api-spec-repository leaves the ref empty")
 
 
 def test_shared_scripts_identical():

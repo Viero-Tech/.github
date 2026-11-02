@@ -31,9 +31,32 @@ on:
         description: Timeout of each lint and test job.
         type: number
         default: 15
+      setup-script:
+        description: Bash script run before flutter pub get in lint and test, relative to working-directory. Empty runs nothing.
+        type: string
+        default: ''
+      api-spec-repository:
+        description: Backend repository (owner/name) whose `pnpm run openapi:spec <file>` writes the OpenAPI document the API client is generated from. Empty skips the job.
+        type: string
+        default: ''
+      api-spec-ref:
+        description: Backend branch, tag or SHA. Empty uses the pull request's base branch, or the pushed branch.
+        type: string
+        default: ''
+      api-spec-node-version:
+        description: Node.js version for the backend's openapi:spec script.
+        type: string
+        default: '24'
+      api-spec-pnpm-version:
+        description: pnpm version for the backend. Empty reads the backend's packageManager pin.
+        type: string
+        default: ''
     secrets:
       git-ssh-key:
         description: Private SSH key that can read the private git dependencies in pubspec.yaml, such as a read-only deploy key.
+        required: false
+      api-spec-ssh-key:
+        description: Private SSH key that can read api-spec-repository, such as a read-only deploy key.
         required: false
     outputs:
       failed-jobs:
@@ -50,6 +73,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       docs-only: ${{ steps.resolve.outputs.docs-only }}
+      api-spec-ref: ${{ steps.resolve.outputs.api-spec-ref }}
     steps:
       # Depth 2 on the pull request merge commit brings its first parent, the
       # base branch tip, so `git diff HEAD^1 HEAD` is exactly what the PR changes.
@@ -63,6 +87,11 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           WORKING_DIRECTORY: ${{ inputs.working-directory }}
           FLUTTER_VERSION: ${{ inputs.flutter-version }}
+          SETUP_SCRIPT: ${{ inputs.setup-script }}
+          API_SPEC_REPOSITORY: ${{ inputs.api-spec-repository }}
+          API_SPEC_REF: ${{ inputs.api-spec-ref }}
+          BASE_REF: ${{ github.base_ref }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -77,6 +106,21 @@ jobs:
           [ -d "$wd" ] || fail "working-directory '$wd' does not exist"
           [ -f "$wd/pubspec.yaml" ] || fail "'$wd/pubspec.yaml' is missing"
           [[ "$FLUTTER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "flutter-version must be an exact version such as 3.35.7, got '$FLUTTER_VERSION'"
+          setup_script="${SETUP_SCRIPT:-}"
+          if [ -n "$setup_script" ]; then
+            case "/$setup_script/" in
+              //*|*/../*) fail "setup-script must be a relative path inside working-directory, got '$setup_script'" ;;
+            esac
+            [ -f "$wd/$setup_script" ] || fail "setup-script '$wd/$setup_script' does not exist"
+          fi
+          api_spec_repository="${API_SPEC_REPOSITORY:-}"
+          api_spec_ref=""
+          if [ -n "$api_spec_repository" ]; then
+            [[ "$api_spec_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "api-spec-repository must be owner/name, got '$api_spec_repository'"
+            api_spec_ref="${API_SPEC_REF:-${BASE_REF:-${REF_NAME:-}}}"
+            [[ "$api_spec_ref" =~ ^[A-Za-z0-9._/-]+$ ]] || fail "api-spec-ref '$api_spec_ref' is not a valid git ref"
+            echo "API spec: $api_spec_repository at $api_spec_ref"
+          fi
 
           docs_only=false
           if [ "$EVENT_NAME" = pull_request ]; then
@@ -94,6 +138,7 @@ jobs:
           fi
 
           echo "docs-only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "api-spec-ref=$api_spec_ref" >> "$GITHUB_OUTPUT"
           echo "Project: $wd, Flutter $FLUTTER_VERSION"
           if [ "$docs_only" = true ]; then
             echo "::notice::Only documentation changed: analyze and tests are skipped."
@@ -140,11 +185,57 @@ jobs:
           fi
           echo "'$HEAD_REF' into '$BASE_REF' follows the promotion path."
 
+  # Builds the backend's OpenAPI document once and hands it to lint and test as an
+  # artifact. The setup script generates the API client from it (API_SPEC_FILE).
+  api-spec:
+    needs: preflight
+    if: needs.preflight.outputs.docs-only == 'false' && inputs.api-spec-repository != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.api-spec-repository }}
+          ref: ${{ needs.preflight.outputs.api-spec-ref }}
+          ssh-key: ${{ secrets.api-spec-ssh-key }}
+          path: api-spec-source
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: ${{ inputs.api-spec-pnpm-version }}
+          package_json_file: api-spec-source/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.api-spec-node-version }}
+          cache: pnpm
+          cache-dependency-path: api-spec-source/pnpm-lock.yaml
+      - name: Install backend dependencies
+        working-directory: api-spec-source
+        run: pnpm install --frozen-lockfile
+      - name: Write the OpenAPI document
+        working-directory: api-spec-source
+        run: |
+          set -euo pipefail
+          spec_file="$RUNNER_TEMP/api-spec/openapi.json"
+          mkdir -p "$(dirname "$spec_file")"
+          pnpm run --silent openapi:spec "$spec_file"
+          jq -e '.openapi and .paths' "$spec_file" > /dev/null || { echo "::error::openapi:spec did not write an OpenAPI document"; exit 1; }
+          echo "OpenAPI $(jq -r .openapi "$spec_file"), $(jq '.paths | length' "$spec_file") paths"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: api-spec
+          path: ${{ runner.temp }}/api-spec/openapi.json
+          if-no-files-found: error
+          retention-days: 1
+
   # flutter analyze treats errors, warnings and infos as fatal, so this job
   # also catches type errors (Dart has no separate typecheck step).
   lint:
-    needs: preflight
-    if: needs.preflight.outputs.docs-only == 'false'
+    needs: [preflight, api-spec]
+    if: >-
+      !cancelled() && needs.preflight.result == 'success'
+      && needs.preflight.outputs.docs-only == 'false'
+      && (needs.api-spec.result == 'success' || (needs.api-spec.result == 'skipped' && inputs.api-spec-repository == ''))
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     defaults:
@@ -176,14 +267,28 @@ jobs:
           # GitHub's published host key (api.github.com/meta), pinned rather than scanned.
           echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' >> ~/.ssh/known_hosts
           printf 'Host github.com\n  IdentityFile ~/.ssh/git_dependency_key\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.api-spec-repository != ''
+        with:
+          name: api-spec
+          path: ${{ runner.temp }}/api-spec
+      - name: Run the setup script
+        if: inputs.setup-script != ''
+        env:
+          SETUP_SCRIPT: ${{ inputs.setup-script }}
+          API_SPEC_FILE: ${{ inputs.api-spec-repository != '' && format('{0}/api-spec/openapi.json', runner.temp) || '' }}
+        run: bash "$SETUP_SCRIPT"
       - name: Get packages
         run: flutter pub get
       - name: Analyze
         run: flutter analyze
 
   test:
-    needs: preflight
-    if: needs.preflight.outputs.docs-only == 'false' && inputs.test
+    needs: [preflight, api-spec]
+    if: >-
+      !cancelled() && needs.preflight.result == 'success'
+      && needs.preflight.outputs.docs-only == 'false' && inputs.test
+      && (needs.api-spec.result == 'success' || (needs.api-spec.result == 'skipped' && inputs.api-spec-repository == ''))
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     defaults:
@@ -215,6 +320,17 @@ jobs:
           # GitHub's published host key (api.github.com/meta), pinned rather than scanned.
           echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' >> ~/.ssh/known_hosts
           printf 'Host github.com\n  IdentityFile ~/.ssh/git_dependency_key\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.api-spec-repository != ''
+        with:
+          name: api-spec
+          path: ${{ runner.temp }}/api-spec
+      - name: Run the setup script
+        if: inputs.setup-script != ''
+        env:
+          SETUP_SCRIPT: ${{ inputs.setup-script }}
+          API_SPEC_FILE: ${{ inputs.api-spec-repository != '' && format('{0}/api-spec/openapi.json', runner.temp) || '' }}
+        run: bash "$SETUP_SCRIPT"
       - name: Get packages
         run: flutter pub get
       - name: Test
@@ -222,7 +338,7 @@ jobs:
 
   ci-summary:
     if: always()
-    needs: [preflight, branch-policy, lint, test]
+    needs: [preflight, branch-policy, api-spec, lint, test]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -237,6 +353,7 @@ jobs:
           JOB_STATES: |
             preflight ${{ needs.preflight.result }} true
             branch-policy ${{ needs.branch-policy.result }} true
+            api-spec ${{ needs.api-spec.result }} ${{ needs.preflight.outputs.docs-only == 'false' && inputs.api-spec-repository != '' }}
             lint ${{ needs.lint.result }} ${{ needs.preflight.outputs.docs-only == 'false' }}
             test ${{ needs.test.result }} ${{ needs.preflight.outputs.docs-only == 'false' && inputs.test }}
         run: |

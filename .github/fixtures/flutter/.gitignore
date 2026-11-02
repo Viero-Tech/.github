@@ -1,3 +1,6 @@
 .dart_tool/
 build/
 pubspec.lock
+
+# Written by the setup fixture script in CI.
+setup/lib/generated.dart

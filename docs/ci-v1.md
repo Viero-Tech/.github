@@ -162,10 +162,16 @@ Prisma 6 and Prisma 7 are supported. On Prisma 7, `migrate deploy` and the drift
 | `test` | boolean | `true` | Run `flutter test` |
 | `branch-rules` | string | `staging:dev,prod:staging` | Promotion sources |
 | `timeout-minutes` | number | `15` | Timeout of each job |
+| `setup-script` | string | empty | Bash script run in lint and test before `flutter pub get`, relative to `working-directory`, for generated code the repository does not commit |
+| `api-spec-repository` | string | empty | Backend repository (`owner/name`) the app's API client is generated from. Empty skips the `api-spec` job |
+| `api-spec-ref` | string | empty | Backend branch, tag or SHA. Empty uses the pull request's base branch, so a pull request into `dev` builds against the backend's `dev` |
+| `api-spec-node-version` | string | `24` | Node.js version for the backend's `openapi:spec` script |
+| `api-spec-pnpm-version` | string | empty | pnpm version for the backend. Empty reads the backend's `packageManager` pin |
 
 | Secret | Required | Purpose |
 |---|---|---|
 | `git-ssh-key` | no | Private SSH key for the private git dependencies in `pubspec.yaml` (`url: git@github.com:<owner>/<repo>.git`), such as a read-only deploy key on the dependency repository. Lint and test load it before `flutter pub get`; without it every git dependency must be public. Actions secrets do not reach Dependabot pull requests: store the same name as a Dependabot secret too |
+| `api-spec-ssh-key` | with a private `api-spec-repository` | Private SSH key that can read `api-spec-repository`, such as a read-only deploy key on it. Store it as a Dependabot secret too |
 
 ```yaml
 jobs:
@@ -175,6 +181,21 @@ jobs:
       flutter-version: '3.44.8'
     secrets:
       git-ssh-key: ${{ secrets.GIT_DEPENDENCY_DEPLOY_KEY }}
+```
+
+**API client generated from a backend.** With `api-spec-repository` set, the `api-spec` job checks out
+the backend, runs `pnpm install --frozen-lockfile` and then `pnpm run openapi:spec <file>`, and passes the
+OpenAPI document to lint and test as an artifact. The setup script finds it at `$API_SPEC_FILE` and
+generates the client from it. The backend's contract is the `openapi:spec` script: it writes the
+document to the path given as its first argument, without a database or other runtime services.
+
+```yaml
+    with:
+      flutter-version: '3.38.10'
+      setup-script: scripts/ci_setup.sh
+      api-spec-repository: Viero-Tech/example-be
+    secrets:
+      api-spec-ssh-key: ${{ secrets.EXAMPLE_BE_DEPLOY_KEY }}
 ```
 
 ### pr-policy.yml
