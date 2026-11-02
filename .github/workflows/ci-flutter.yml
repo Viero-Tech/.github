@@ -31,6 +31,10 @@ on:
         description: Timeout of each lint and test job.
         type: number
         default: 15
+    secrets:
+      git-ssh-key:
+        description: Private SSH key that can read the private git dependencies in pubspec.yaml, such as a read-only deploy key.
+        required: false
     outputs:
       failed-jobs:
         description: Space-separated jobs that failed, were cancelled, or were skipped while switched on.
@@ -155,6 +159,23 @@ jobs:
           channel: stable
           flutter-version: ${{ inputs.flutter-version }}
           cache: true
+      # A pubspec git dependency on a private repository (url: git@github.com:...) needs an SSH
+      # identity. Without the secret the step does nothing and every git dependency must be public.
+      - name: Load the git dependency key
+        env:
+          GIT_SSH_KEY: ${{ secrets.git-ssh-key }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GIT_SSH_KEY" ]; then
+            echo "No git-ssh-key passed: git dependencies must be public."
+            exit 0
+          fi
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$GIT_SSH_KEY" > ~/.ssh/git_dependency_key
+          chmod 600 ~/.ssh/git_dependency_key
+          # GitHub's published host key (api.github.com/meta), pinned rather than scanned.
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' >> ~/.ssh/known_hosts
+          printf 'Host github.com\n  IdentityFile ~/.ssh/git_dependency_key\n  IdentitiesOnly yes\n' >> ~/.ssh/config
       - name: Get packages
         run: flutter pub get
       - name: Analyze
@@ -177,6 +198,23 @@ jobs:
           channel: stable
           flutter-version: ${{ inputs.flutter-version }}
           cache: true
+      # A pubspec git dependency on a private repository (url: git@github.com:...) needs an SSH
+      # identity. Without the secret the step does nothing and every git dependency must be public.
+      - name: Load the git dependency key
+        env:
+          GIT_SSH_KEY: ${{ secrets.git-ssh-key }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GIT_SSH_KEY" ]; then
+            echo "No git-ssh-key passed: git dependencies must be public."
+            exit 0
+          fi
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$GIT_SSH_KEY" > ~/.ssh/git_dependency_key
+          chmod 600 ~/.ssh/git_dependency_key
+          # GitHub's published host key (api.github.com/meta), pinned rather than scanned.
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' >> ~/.ssh/known_hosts
+          printf 'Host github.com\n  IdentityFile ~/.ssh/git_dependency_key\n  IdentitiesOnly yes\n' >> ~/.ssh/config
       - name: Get packages
         run: flutter pub get
       - name: Test
