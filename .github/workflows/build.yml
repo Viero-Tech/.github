@@ -25,6 +25,12 @@ name: Build and push
 #         image: idp-be
 #         target: production
 #         migrate-target: migrator
+#       # Only when the Dockerfile installs private packages from GitHub Packages (caller also grants
+#       # `packages: read`):
+#       secrets:
+#         npm-token: ${{ secrets.GITHUB_TOKEN }}
+#
+# Every build receives `--build-arg GIT_SHA=<short sha>` (a Dockerfile without `ARG GIT_SHA` ignores it).
 
 on:
   workflow_call:
@@ -50,6 +56,11 @@ on:
       dockerfile:
         type: string
         default: Dockerfile
+    secrets:
+      npm-token:
+        # Passed to both builds as the BuildKit secret NODE_AUTH_TOKEN (a mounted file, never a layer or an
+        # ARG). Callers that install from GitHub Packages pass their GITHUB_TOKEN with `packages: read`.
+        required: false
     outputs:
       app-digest:
         value: ${{ jobs.build.outputs.app-digest }}
@@ -116,6 +127,7 @@ jobs:
           version="$REF_NAME-$(date -u +%Y%m%d%H%M%S)-$sha"
           {
             echo "version=$version"
+            echo "short-sha=$sha"
             echo "branch-sha=$REF_NAME-$sha"
             echo "ar-app=$AR_PATH/$IMAGE"
             echo "ar-migrate=$AR_PATH/${AR_MIGRATE_IMAGE:-$IMAGE-migrator}"
@@ -164,11 +176,16 @@ jobs:
           ECR_IMAGE: ${{ steps.names.outputs.ecr-migrate }}
           VERSION: ${{ steps.names.outputs.version }}
           BRANCH_SHA: ${{ steps.names.outputs.branch-sha }}
+          GIT_SHA: ${{ steps.names.outputs.short-sha }}
+          NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
         run: |
           set -euo pipefail
           meta="$RUNNER_TEMP/migrate-metadata.json"
+          secret_args=()
+          if [ -n "$NODE_AUTH_TOKEN" ]; then secret_args=(--secret id=NODE_AUTH_TOKEN,env=NODE_AUTH_TOKEN); fi
           docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
             --file "$DOCKERFILE" --target "$TARGET" --metadata-file "$meta" \
+            "${secret_args[@]}" --build-arg GIT_SHA="$GIT_SHA" \
             --tag "$AR_IMAGE:$VERSION" --tag "$AR_IMAGE:$BRANCH_SHA" --tag "$ECR_IMAGE:$VERSION" \
             --push .
           digest=$(jq -er '."containerimage.digest"' "$meta")
@@ -183,13 +200,18 @@ jobs:
           ECR_IMAGE: ${{ steps.names.outputs.ecr-app }}
           VERSION: ${{ steps.names.outputs.version }}
           BRANCH_SHA: ${{ steps.names.outputs.branch-sha }}
+          GIT_SHA: ${{ steps.names.outputs.short-sha }}
+          NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
         run: |
           set -euo pipefail
           meta="$RUNNER_TEMP/app-metadata.json"
           target_args=()
           if [ -n "$TARGET" ]; then target_args=(--target "$TARGET"); fi
+          secret_args=()
+          if [ -n "$NODE_AUTH_TOKEN" ]; then secret_args=(--secret id=NODE_AUTH_TOKEN,env=NODE_AUTH_TOKEN); fi
           docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
             --file "$DOCKERFILE" "${target_args[@]}" --metadata-file "$meta" \
+            "${secret_args[@]}" --build-arg GIT_SHA="$GIT_SHA" \
             --tag "$AR_IMAGE:$VERSION" --tag "$AR_IMAGE:$BRANCH_SHA" --tag "$ECR_IMAGE:$VERSION" \
             --push .
           digest=$(jq -er '."containerimage.digest"' "$meta")

@@ -335,6 +335,11 @@ def test_build_workflow():
     inputs = trigger["workflow_call"].get("inputs", {})
     banned = [name for name in inputs if any(word in name.lower() for word in ("ref", "sha", "checkout", "commit"))]
     check(not banned, f"build.yml declares no ref, sha, checkout or commit input (found {banned})")
+    secrets = trigger["workflow_call"].get("secrets", {})
+    check(set(secrets) <= {"npm-token"}, f"build.yml takes no secret but npm-token (found {sorted(secrets)})")
+    steps_text = yaml.safe_dump(data["jobs"]["build"]["steps"])
+    check("--build-arg NODE_AUTH_TOKEN" not in steps_text and "--build-arg=NODE_AUTH_TOKEN" not in steps_text,
+          "build.yml never passes the npm token as a build arg")
     checkout = [s for s in data["jobs"]["build"]["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
     check(len(checkout) == 1, "build.yml checks out once")
     if checkout:
