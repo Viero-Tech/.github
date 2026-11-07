@@ -182,7 +182,7 @@ jobs:
           set -euo pipefail
           meta="$RUNNER_TEMP/migrate-metadata.json"
           secret_args=()
-          if [ -n "$NODE_AUTH_TOKEN" ]; then secret_args=(--secret id=NODE_AUTH_TOKEN,env=NODE_AUTH_TOKEN); fi
+          if [ -n "$NODE_AUTH_TOKEN" ]; then secret_args=(--secret "id=NODE_AUTH_TOKEN,env=NODE_AUTH_TOKEN"); fi
           docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
             --file "$DOCKERFILE" --target "$TARGET" --metadata-file "$meta" \
             "${secret_args[@]}" --build-arg GIT_SHA="$GIT_SHA" \
@@ -208,7 +208,7 @@ jobs:
           target_args=()
           if [ -n "$TARGET" ]; then target_args=(--target "$TARGET"); fi
           secret_args=()
-          if [ -n "$NODE_AUTH_TOKEN" ]; then secret_args=(--secret id=NODE_AUTH_TOKEN,env=NODE_AUTH_TOKEN); fi
+          if [ -n "$NODE_AUTH_TOKEN" ]; then secret_args=(--secret "id=NODE_AUTH_TOKEN,env=NODE_AUTH_TOKEN"); fi
           docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
             --file "$DOCKERFILE" "${target_args[@]}" --metadata-file "$meta" \
             "${secret_args[@]}" --build-arg GIT_SHA="$GIT_SHA" \
