@@ -253,6 +253,12 @@ jobs:
 | `ar-migrate-image` | `<image>-migrator` | Artifact Registry name of the migration image (ECR uses `viero/<image>-migrate`) |
 | `dockerfile` | `Dockerfile` | Path of the Dockerfile |
 
+| Secret | Purpose |
+|---|---|
+| `npm-token` | Optional. Mounted into both builds as the BuildKit secret `NODE_AUTH_TOKEN` (never a layer or a build arg), for Dockerfiles that install private packages from GitHub Packages. Pass `${{ secrets.GITHUB_TOKEN }}` and grant `packages: read` in the caller |
+
+Every build also receives `--build-arg GIT_SHA=<short sha>`; a Dockerfile without `ARG GIT_SHA` ignores it.
+
 Outputs: `app-digest`, `migrate-digest`.
 
 | Registry | Tags |
