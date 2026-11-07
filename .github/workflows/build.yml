@@ -18,6 +18,7 @@ name: Build and push
 #   permissions:
 #     contents: read
 #     id-token: write
+#     packages: read   # only when passing npm-token (private GitHub Packages)
 #   jobs:
 #     build:
 #       uses: Viero-Tech/.github/.github/workflows/build.yml@v1
@@ -67,9 +68,10 @@ on:
       migrate-digest:
         value: ${{ jobs.build.outputs.migrate-digest }}
 
-permissions:
-  contents: read
-  id-token: write
+# No permissions block here or on the job: the build job's GITHUB_TOKEN gets exactly what the caller grants.
+# Every caller grants contents: read and id-token: write; a caller that installs private GitHub Packages also
+# grants packages: read, and passes that token as npm-token. A permission declared here would either cap a
+# caller below what it needs or make every caller grant it.
 
 env:
   AR_REGISTRY: europe-west1-docker.pkg.dev
@@ -85,9 +87,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    permissions:
-      contents: read
-      id-token: write
     outputs:
       app-digest: ${{ steps.app.outputs.digest }}
       migrate-digest: ${{ steps.migrate.outputs.digest }}

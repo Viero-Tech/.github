@@ -255,7 +255,7 @@ jobs:
 
 | Secret | Purpose |
 |---|---|
-| `npm-token` | Optional. Mounted into both builds as the BuildKit secret `NODE_AUTH_TOKEN` (never a layer or a build arg), for Dockerfiles that install private packages from GitHub Packages. Pass `${{ secrets.GITHUB_TOKEN }}` and grant `packages: read` in the caller |
+| `npm-token` | Optional. Mounted into both builds as the BuildKit secret `NODE_AUTH_TOKEN` (never a layer or a build arg), for Dockerfiles that install private packages from GitHub Packages. Pass `${{ secrets.GITHUB_TOKEN }}` and grant `packages: read` in the caller: the build job has no permissions block of its own, so its token carries exactly the caller's grants |
 
 Every build also receives `--build-arg GIT_SHA=<short sha>`; a Dockerfile without `ARG GIT_SHA` ignores it.
 
