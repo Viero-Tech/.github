@@ -356,6 +356,60 @@ def test_build_workflow():
         check(run("pull_request", "refs/pull/1/merge") != 0, "build.yml refuses pull_request")
         check(run("push", "refs/tags/v1") != 0, "build.yml refuses a tag push")
         check(run("push", "refs/heads/staging", "Bad_Name") != 0, "build.yml refuses an image name that is not a DNS label")
+    test_build_tool_install()
+
+
+def write_fake_tool(path, name):
+    path.write_text(f"#!/bin/sh\necho '{name} fake'\n")
+    path.chmod(0o755)
+
+
+def sha256_of(path):
+    return subprocess.run(["sha256sum", str(path)], capture_output=True, text=True, check=True).stdout.split()[0]
+
+
+def test_build_tool_install():
+    """The Cosign and Syft files come from the Actions cache when it hits, so the SHA-256 check is the only
+    thing that stands between a cached file and the signing step: it must run on a hit, and a failed
+    download must never leave a file behind that a later run would treat as cached."""
+    print("build.yml: install Cosign and Syft")
+    script, _ = step_script("build.yml", "build", "Install Cosign and Syft")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        tools = tmp / "home" / ".cache" / "viero-ci" / "tools"
+        tools.mkdir(parents=True)
+        fake_bin = tmp / "fake-bin"
+        fake_bin.mkdir()
+        # Any download in these cases is a failure: a cache hit must not fetch, and an outage returns 22.
+        (fake_bin / "curl").write_text("#!/bin/sh\necho 'curl: (22) 504' >&2\nexit 22\n")
+        (fake_bin / "curl").chmod(0o755)
+        write_fake_tool(tools / "cosign-linux-amd64", "cosign")
+        staging = tmp / "syft-src"
+        staging.mkdir()
+        write_fake_tool(staging / "syft", "syft")
+        tarball = tools / "syft_1.0.0_linux_amd64.tar.gz"
+        subprocess.run(["tar", "-czf", str(tarball), "-C", str(staging), "syft"], check=True)
+        github_path = tmp / "github_path"
+
+        def run(cosign_sha, syft_sha):
+            github_path.write_text("")
+            env = {"HOME": str(tmp / "home"), "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                   "GITHUB_PATH": str(github_path), "COSIGN_VERSION": "v3.0.0", "COSIGN_SHA256": cosign_sha,
+                   "SYFT_VERSION": "v1.0.0", "SYFT_SHA256": syft_sha}
+            return run_script(script, env, str(tmp))
+
+        good_cosign, good_syft = sha256_of(tools / "cosign-linux-amd64"), sha256_of(tarball)
+        code, out, _ = run(good_cosign, good_syft)
+        check(code == 0, "a cache hit with matching SHA-256 values installs without downloading")
+        check(github_path.read_text().strip() == str(tools / "bin"), "the tools directory is added to the PATH")
+        check("cosign fake" in out and "syft fake" in out, "both installed binaries run")
+        check(run("0" * 64, good_syft)[0] != 0, "a cached Cosign with the wrong SHA-256 is refused")
+        check(run(good_cosign, "0" * 64)[0] != 0, "a cached Syft with the wrong SHA-256 is refused")
+
+        (tools / "cosign-linux-amd64").unlink()
+        code, _, _ = run(good_cosign, good_syft)
+        check(code != 0, "a failed download fails the step")
+        check(not (tools / "cosign-linux-amd64").exists(), "a failed download leaves no file to cache")
 
 
 def main():
