@@ -75,7 +75,7 @@ on:
         type: string
         default: ''
       node-options:
-        description: NODE_OPTIONS for the test, e2e and contract jobs, for example --max-old-space-size=6144.
+        description: NODE_OPTIONS for the lint, test, e2e and contract jobs, for example --max-old-space-size=6144.
         type: string
         default: ''
       env:
@@ -324,6 +324,7 @@ jobs:
       - name: Lint
         env:
           MAX_WARNINGS: ${{ inputs.lint-max-warnings }}
+          NODE_OPTIONS: ${{ inputs.node-options }}
         run: pnpm exec eslint . --max-warnings="$MAX_WARNINGS"
 
   typecheck:
