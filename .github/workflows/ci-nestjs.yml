@@ -75,7 +75,7 @@ on:
         type: string
         default: ''
       node-options:
-        description: NODE_OPTIONS for the lint, test, e2e and contract jobs, for example --max-old-space-size=6144.
+        description: NODE_OPTIONS for the lint, test, e2e and contract jobs, for example --max-old-space-size=6144. Lint defaults to --max-old-space-size=4096 when this is empty.
         type: string
         default: ''
       env:
@@ -324,7 +324,8 @@ jobs:
       - name: Lint
         env:
           MAX_WARNINGS: ${{ inputs.lint-max-warnings }}
-          NODE_OPTIONS: ${{ inputs.node-options }}
+          # Type-aware ESLint outgrows the ~2 GB Node default heap on large repos.
+          NODE_OPTIONS: ${{ inputs.node-options || '--max-old-space-size=4096' }}
         run: pnpm exec eslint . --max-warnings="$MAX_WARNINGS"
 
   typecheck:
