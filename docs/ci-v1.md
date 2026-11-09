@@ -109,7 +109,7 @@ On a pull request, `branch-policy` fails when the head branch is not the promoti
 | `database-password` | string | `postgres` | Password of the `postgres` user, CI only |
 | `redis` | boolean | `false` | Redis service for test, e2e and contract |
 | `migrate-script` | string | | Script run before test, e2e and contract |
-| `node-options` | string | | `NODE_OPTIONS` for lint, test, e2e and contract |
+| `node-options` | string | | `NODE_OPTIONS` for lint, test, e2e and contract; lint uses `--max-old-space-size=4096` when empty |
 | `env` | string | | Non-secret `KEY=value` lines exported to build, test, e2e and contract. CI-only values; the workflow refuses names it sets itself (`DATABASE_URL`, `REDIS_URL`, `NODE_OPTIONS`, `NODE_AUTH_TOKEN`, `CI`, `PATH`, `GITHUB_*`, `RUNNER_*`, `ACTIONS_*`) |
 | `branch-rules` | string | `staging:dev,prod:staging` | Promotion sources |
 | `timeout-minutes` | number | `15` | Timeout of each job except e2e |
