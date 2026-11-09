@@ -81,7 +81,13 @@ env:
   AWS_ACCOUNT: '514180701907'
   AWS_REGION: eu-west-1
   ECR_REGISTRY: 514180701907.dkr.ecr.eu-west-1.amazonaws.com
+  # Cosign and Syft are fetched once per version into the Actions cache and checked against these SHA-256
+  # values on every run, cache hit or not. Each value is the release's own checksum, from a checksum file
+  # whose keyless signature was verified when the pin was set. Bump a version and its SHA together.
   COSIGN_VERSION: v3.1.4
+  COSIGN_SHA256: 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
+  SYFT_VERSION: v1.54.0
+  SYFT_SHA256: 54a87372498168b2d033e876fd41fa4e8035b872699e525a57046e1f2f09c860
 
 jobs:
   build:
@@ -240,9 +246,38 @@ jobs:
           done < "$refs"
           echo "file=$refs" >> "$GITHUB_OUTPUT"
 
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Restore Cosign and Syft
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          cosign-release: ${{ env.COSIGN_VERSION }}
+          path: ~/.cache/viero-ci/tools
+          key: tools-linux-amd64-cosign-${{ env.COSIGN_SHA256 }}-syft-${{ env.SYFT_SHA256 }}
+
+      # GitHub release downloads return bursts of 504s; the retries ride through short ones and the cache
+      # through longer ones. The SHA-256 check runs on every run, so a cached file is never trusted as is.
+      - name: Install Cosign and Syft
+        run: |
+          set -euo pipefail
+          dir="$HOME/.cache/viero-ci/tools"
+          mkdir -p "$dir/bin"
+          fetch() {
+            [ -f "$dir/$1" ] && return 0
+            curl -fsSL --retry 8 --retry-all-errors --retry-delay 15 --retry-max-time 300 -o "$dir/$1.part" "$2"
+            mv "$dir/$1.part" "$dir/$1"
+          }
+          fetch cosign-linux-amd64 \
+            "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-linux-amd64"
+          fetch "syft_${SYFT_VERSION#v}_linux_amd64.tar.gz" \
+            "https://github.com/anchore/syft/releases/download/$SYFT_VERSION/syft_${SYFT_VERSION#v}_linux_amd64.tar.gz"
+          (
+            cd "$dir"
+            printf '%s  %s\n' "$COSIGN_SHA256" cosign-linux-amd64 \
+              "$SYFT_SHA256" "syft_${SYFT_VERSION#v}_linux_amd64.tar.gz" | sha256sum --check --strict
+          )
+          install -m 0755 "$dir/cosign-linux-amd64" "$dir/bin/cosign"
+          tar -xzf "$dir/syft_${SYFT_VERSION#v}_linux_amd64.tar.gz" -C "$dir/bin" syft
+          echo "$dir/bin" >> "$GITHUB_PATH"
+          "$dir/bin/cosign" version
+          "$dir/bin/syft" version
 
       # Keyless: the certificate carries this workflow, the caller repo, its ref, the trigger and the run.
       - name: Sign every digest
@@ -254,24 +289,23 @@ jobs:
             cosign sign --yes "$ref"
           done < "$REFS_FILE"
 
+      # The same command anchore/sbom-action ran (syft scan <image> -o spdx-json), without its download.
       - name: Generate the app SBOM
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-        with:
-          image: ${{ steps.names.outputs.ecr-app }}@${{ steps.app.outputs.digest }}
-          format: spdx-json
-          output-file: ${{ runner.temp }}/app.spdx.json
-          upload-artifact: false
-          upload-release-assets: false
+        env:
+          IMAGE: ${{ steps.names.outputs.ecr-app }}@${{ steps.app.outputs.digest }}
+          SYFT_CHECK_FOR_APP_UPDATE: 'false'
+        run: |
+          set -euo pipefail
+          syft scan "$IMAGE" -o "spdx-json=$RUNNER_TEMP/app.spdx.json"
 
       - name: Generate the migration SBOM
         if: inputs.migrate-target != ''
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-        with:
-          image: ${{ steps.names.outputs.ecr-migrate }}@${{ steps.migrate.outputs.digest }}
-          format: spdx-json
-          output-file: ${{ runner.temp }}/migrate.spdx.json
-          upload-artifact: false
-          upload-release-assets: false
+        env:
+          IMAGE: ${{ steps.names.outputs.ecr-migrate }}@${{ steps.migrate.outputs.digest }}
+          SYFT_CHECK_FOR_APP_UPDATE: 'false'
+        run: |
+          set -euo pipefail
+          syft scan "$IMAGE" -o "spdx-json=$RUNNER_TEMP/migrate.spdx.json"
 
       - name: Attest the SBOMs
         env:
